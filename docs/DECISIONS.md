@@ -111,3 +111,103 @@ absolute. Required by SEALEDSTELLAR_BUILD_PLAN.md (working method).
   ~/.claude/REFERENCE_SECURITY_AUDIT.md) and the plan's fallback
   docs/standards/ both do not exist; the live copies are the repo's
   .claude/SKILL_GENERAL.md and .claude/REFERENCE_SECURITY_AUDIT.md.
+
+## 2026-06-12: eligibility item CLOSED, repo facts
+
+- Drew checked the official hackathon rules page by hand: requirements are a
+  public repo, a 2 to 3 minute video, and load-bearing ZK on Stellar. No
+  restriction on pre-window code. The 2026-06-11 open action is closed; no
+  rebuild of the days 1-2 artifacts is needed.
+- Repo pushed as commit ec26f48 to https://github.com/Andy00L/sealedstellar,
+  kept private until submission day (the submission checklist flips it
+  public).
+
+## 2026-06-12: FROZEN public input order and circuit semantics (days 3-4)
+
+Frozen before any constraint was written, per plan section 2.6. Any change
+to this list after today is a protocol change and needs an explicit
+decision entry plus regenerated keys.
+
+Public signal vector (public.json index: meaning), 13 signals total:
+
+- 0: auction_id (u64 as field element)
+- 1 to 8: commitments[0..7], slot order = bid arrival order on chain
+- 9: winner_index (0..7)
+- 10: winning_price (token base units, 64-bit range)
+- 11: whitelist_root (Poseidon Merkle root, depth 10)
+- 12: winner_addr_hash (leaf for the winner address)
+
+The circuit declares these as public inputs in exactly this order and has
+zero output signals, so snarkjs public.json reproduces the list verbatim.
+The verifier vkey IC therefore has length 14. The auction contract (days
+5-6) must rebuild this exact vector from storage plus settle arguments.
+
+Frozen semantic constants:
+
+- EMPTY_COMMITMENT = 0. The contract fills unused bid slots with 0;
+  in-circuit an empty slot forces that slot's price to 0 and skips the
+  Poseidon binding for it.
+- commitment_i = Poseidon3(price_i, salt_i, auction_id) over BN254
+  (circomlib constants; circomlibjs computes the same hash in the browser).
+- winner_addr_hash = Poseidon2(hi_128, lo_128) where hi_128 and lo_128 are
+  the big-endian halves of the 32-byte ed25519 public key of the winner
+  address. Whitelist leaves use the same mapping. 32 bytes never reduce mod
+  the field this way (each half is below 2^128).
+- Whitelist tree: depth 10 (1024 leaves), internal nodes Poseidon2, unused
+  leaves padded with 0. A real address leaf is a Poseidon output and is
+  never 0, so the padding cannot be proven as a member by an honest
+  contract-supplied winner_addr_hash.
+- Tie-break: for every index strictly below winner_index the winner's price
+  must be strictly greater; equal prices at higher indexes are allowed.
+  Lowest index among equal highest bids wins, enforced in-circuit.
+- Prices are range-checked to 64 bits; winning_price must be nonzero and
+  equal to the selected winner's price.
+
+Open question parked for days 5-6: whether the CAP-0075 host poseidon
+matches circomlib parameters (t, rounds, constants). If it does not, the
+contract will compare against stored leaf hashes instead of hashing
+addresses on chain; the circuit and this freeze are unaffected either way.
+
+## 2026-06-12: days 3-4 milestone DONE, real circuit verified on testnet
+
+- circuits/auction_winner.circom implements plan section 2.6 exactly:
+  commitment binding with the empty-slot escape, 64-bit price range checks,
+  one-hot winner selector (also forces winner_index into 0..7), maximality
+  with the strict lowest-index tie-break, winning_price equality and nonzero
+  check, Poseidon Merkle membership at depth 10 (circuits/lib/merkle.circom,
+  circuits/lib/commitment.circom).
+- Measured compile output (circom 2.2.3): 6229 non-linear constraints, 5566
+  linear constraints, 11795 total, 13 public inputs, 36 private inputs, 0
+  outputs, 11768 wires, 152 template instances. Within the 2^14 pot14 bound
+  with 4589 to spare, so the plan 2.6 size estimate holds and no feature
+  cuts are needed.
+- Test suite: 12 circom_tester tests, all passing in 5 seconds (plan
+  required 8 minimum). Coverage: honest winner with empty slots, full house
+  of 8 real bids, frozen public-order assertion against the witness, wrong
+  winner_index, inflated winning_price, commitment mismatch, zero winning
+  price on an all-zero auction, tie accepted at lower index and rejected at
+  higher, empty-slot winner under both price stories, cross-auction replay
+  (commitments recomputed for auction 43 against public id 42),
+  non-whitelisted winner, out-of-range winner_index 8.
+- Groth16 setup ran with pot14 plus one dev contribution (trusted-setup
+  weakness stays on the MOCKS ledger). vkey nPublic 13, IC length 14.
+  snarkjs verified the 8-bid demo proof locally (OK) and
+  build/public.json matched build/expected_public.json exactly, proving the
+  frozen order end to end.
+- Second verifier instance deployed from the existing wasm (hash
+  f0461817482c8b661f00f1bdfefce35ca339ae6bbe86ef664b607a4e3866f5fa, no
+  re-upload) with the real vkey in the constructor:
+  CDQFIRJYA4AB2N2QSFPU52MGYFYUD3LF7KMMCJKEPYNO2WY5EARUTAUY
+  deploy tx (fee_charged 190566 stroops):
+  4ae632827cfad11f80d8d27098b12d997e3d9b02d631760a9131f27adb802545
+- PASS tx, real proof, 13 signals, returned true (fee_charged 35764
+  stroops):
+  d51072a38f10ad2fd0b87c7d3b3d6893a482de9f5a992599281d3130345cb7ca
+  https://stellar.expert/explorer/testnet/tx/d51072a38f10ad2fd0b87c7d3b3d6893a482de9f5a992599281d3130345cb7ca
+- FAIL tx, winning_price flipped 3500 to 3600, returned false (fee_charged
+  35764 stroops):
+  8ad5171539b4f7be0ca98d020f3b2f165a2156f012171027fbf2fb452c28ddca
+  https://stellar.expert/explorer/testnet/tx/8ad5171539b4f7be0ca98d020f3b2f165a2156f012171027fbf2fb452c28ddca
+- The days 1-2 spike instance (CAEXSNOU...) keeps the spike vkey and stays
+  untouched as the gate record; the auction contract (days 5-6) will call
+  the new CDQFIRJY... instance.

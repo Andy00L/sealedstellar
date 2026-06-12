@@ -1,0 +1,18 @@
+{
+  "name": "sealedstellar-circuits",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Circom circuits and tests for SealedStellar sealed-bid auctions",
+  "scripts": {
+    "test": "mocha --timeout 600000 test/**/*.test.js"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7"
+  },
+  "devDependencies": {
+    "chai": "^4.5.0",
+    "circom_tester": "^0.0.20",
+    "mocha": "^10.7.0"
+  }
+}
