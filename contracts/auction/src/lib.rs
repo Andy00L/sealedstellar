@@ -16,6 +16,12 @@ const MAX_BID_SLOTS: u32 = 8;
 // encrypted (price, salt) payload is about 79 bytes; 256 leaves headroom
 // without letting events bloat.
 const MAX_ENCRYPTED_BID_BYTES: u32 = 256;
+// Ledger close cadence and TTL bounds for storage lifetime extension.
+// sourceRef: Stellar docs, 5 second target close time; the network caps an
+// entry's TTL extension around six months of ledgers.
+const SECONDS_PER_LEDGER: u64 = 5;
+const LEDGERS_PER_DAY: u32 = 17_280;
+const MAX_TTL_EXTENSION_LEDGERS: u32 = 3_000_000;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -42,6 +48,13 @@ pub enum AuctionError {
     ProofInvalid = 19,
     VerifierCallFailed = 20,
     RefundTooEarly = 21,
+    /// reclaim_lot is only meaningful after refund_all left the lot behind.
+    ReclaimRequiresRefundedAuction = 22,
+    /// The lot already reached the seller (during refund_all or a previous
+    /// reclaim_lot call).
+    LotAlreadyReclaimed = 23,
+    /// The rwa token rejected the lot transfer again during reclaim_lot.
+    LotTransferFailed = 24,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +86,10 @@ pub struct Auction {
     pub operator_enc_pubkey: BytesN<32>,
     pub status: AuctionStatus,
     pub bids: Vec<Bid>,
+    /// True once the lot has left escrow toward the seller after a refund.
+    /// Audit fix 2026-06-12 finding 1: a trapping rwa token must never block
+    /// deposit refunds, so the lot leg is retryable instead of fatal.
+    pub lot_reclaimed: bool,
 }
 
 #[derive(Clone)]
@@ -144,6 +161,24 @@ pub struct AuctionRefunded {
     pub refunded_bids: u32,
 }
 
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LotReturnFailed {
+    #[topic]
+    pub auction_id: u64,
+    pub seller: Address,
+    pub lot_amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LotReclaimed {
+    #[topic]
+    pub auction_id: u64,
+    pub seller: Address,
+    pub lot_amount: i128,
+}
+
 #[contract]
 pub struct SealedAuction;
 
@@ -200,11 +235,8 @@ impl SealedAuction {
             .instance()
             .set(&DataKey::NextAuctionId, &(auction_id + 1));
 
-        token::Client::new(&env, &rwa_token).transfer(
-            &seller,
-            &env.current_contract_address(),
-            &lot_amount,
-        );
+        let escrow_address = env.current_contract_address();
+        token::Client::new(&env, &rwa_token).transfer(&seller, &escrow_address, &lot_amount);
 
         let auction = Auction {
             seller: seller.clone(),
@@ -218,10 +250,33 @@ impl SealedAuction {
             operator_enc_pubkey,
             status: AuctionStatus::Open,
             bids: vec![&env],
+            lot_reclaimed: false,
         };
         env.storage()
             .persistent()
             .set(&DataKey::Auction(auction_id), &auction);
+
+        // Audit fix 2026-06-12 finding 3: keep the auction entry and the
+        // contract instance alive on the ledger for the whole auction
+        // lifetime plus a day of margin, so archival cannot block settle or
+        // refund_all.
+        let lifetime_seconds = (commit_deadline - env.ledger().timestamp())
+            .saturating_add(grace_period);
+        let lifetime_ledgers_u64 = (lifetime_seconds / SECONDS_PER_LEDGER)
+            .saturating_add(LEDGERS_PER_DAY as u64);
+        let lifetime_ledgers = if lifetime_ledgers_u64 > MAX_TTL_EXTENSION_LEDGERS as u64 {
+            MAX_TTL_EXTENSION_LEDGERS
+        } else {
+            lifetime_ledgers_u64 as u32
+        };
+        env.storage().persistent().extend_ttl(
+            &DataKey::Auction(auction_id),
+            lifetime_ledgers,
+            lifetime_ledgers,
+        );
+        env.storage()
+            .instance()
+            .extend_ttl(lifetime_ledgers, lifetime_ledgers);
 
         AuctionCreated {
             auction_id,
@@ -267,9 +322,10 @@ impl SealedAuction {
             return Err(AuctionError::EncryptedBidTooLarge);
         }
 
+        let escrow_address = env.current_contract_address();
         token::Client::new(&env, &auction.payment_token).transfer(
             &bidder,
-            &env.current_contract_address(),
+            &escrow_address,
             &auction.max_price,
         );
 
@@ -408,15 +464,67 @@ impl SealedAuction {
         for refunded_bid in auction.bids.iter() {
             payment.transfer(&contract_address, &refunded_bid.bidder, &auction.max_price);
         }
-        token::Client::new(&env, &auction.rwa_token).transfer(
+
+        // Audit fix 2026-06-12 finding 1: the lot-return leg must never be
+        // able to block the deposit refunds above. A seller-supplied rwa
+        // token that traps here leaves the lot parked in escrow, retryable
+        // through reclaim_lot, while every bidder still gets refunded.
+        let lot_return = token::Client::new(&env, &auction.rwa_token).try_transfer(
             &contract_address,
             &auction.seller,
             &auction.lot_amount,
         );
+        if matches!(lot_return, Ok(Ok(()))) {
+            auction.lot_reclaimed = true;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Auction(auction_id), &auction);
+        } else {
+            LotReturnFailed {
+                auction_id,
+                seller: auction.seller.clone(),
+                lot_amount: auction.lot_amount,
+            }
+            .publish(&env);
+        }
 
         AuctionRefunded {
             auction_id,
             refunded_bids: auction.bids.len(),
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Retries returning the lot to the seller after refund_all could not
+    /// (for example the rwa token trapped at refund time). Permissionless:
+    /// the lot can only ever move to the stored seller.
+    pub fn reclaim_lot(env: Env, auction_id: u64) -> Result<(), AuctionError> {
+        let mut auction = load_auction(&env, auction_id)?;
+        if auction.status != AuctionStatus::Refunded {
+            return Err(AuctionError::ReclaimRequiresRefundedAuction);
+        }
+        if auction.lot_reclaimed {
+            return Err(AuctionError::LotAlreadyReclaimed);
+        }
+
+        let lot_return = token::Client::new(&env, &auction.rwa_token).try_transfer(
+            &env.current_contract_address(),
+            &auction.seller,
+            &auction.lot_amount,
+        );
+        if !matches!(lot_return, Ok(Ok(()))) {
+            return Err(AuctionError::LotTransferFailed);
+        }
+        auction.lot_reclaimed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Auction(auction_id), &auction);
+
+        LotReclaimed {
+            auction_id,
+            seller: auction.seller.clone(),
+            lot_amount: auction.lot_amount,
         }
         .publish(&env);
         Ok(())
@@ -478,6 +586,12 @@ fn build_public_signals(
 /// computeAddressLeaf. The 32 bytes are the tail of the ScAddress XDR: the
 /// ed25519 public key for accounts, the contract id for contracts.
 /// sourceRef: stellar-xdr ScAddress definition.
+///
+/// Security invariant (audit 2026-06-12 finding 5): the whitelist tree pads
+/// unused leaves with 0, and the circuit would accept a membership proof
+/// for a 0 leaf. That is unreachable because this function is the only
+/// source of winner_addr_hash and a Poseidon output is never 0; the caller
+/// can never supply the leaf directly (plan section 2.7).
 fn address_leaf(env: &Env, address: &Address) -> U256 {
     let address_xdr: Bytes = address.clone().to_xdr(env);
     let xdr_length = address_xdr.len();

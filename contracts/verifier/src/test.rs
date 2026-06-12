@@ -129,7 +129,7 @@ fn verify_accepts_valid_proof() {
     let client = register_verifier(&env);
 
     let signals = Vec::from_array(&env, [U256::from_u32(&env, PUBLIC_PRODUCT)]);
-    assert_eq!(client.verify(&fixture_proof(&env), &signals), true);
+    assert!(client.verify(&fixture_proof(&env), &signals));
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn verify_rejects_wrong_public_signal() {
 
     // 34 instead of 33: well formed, must fail the pairing check.
     let signals = Vec::from_array(&env, [U256::from_u32(&env, PUBLIC_PRODUCT + 1)]);
-    assert_eq!(client.verify(&fixture_proof(&env), &signals), false);
+    assert!(!client.verify(&fixture_proof(&env), &signals));
 }
 
 #[test]

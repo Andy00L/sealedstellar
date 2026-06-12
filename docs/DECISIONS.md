@@ -354,3 +354,28 @@ auction 2 after its real-time grace period.
   gained a vkey-only mode for deploy time.
 - Salts and decrypted prices exist only in files under the run directory in
   /tmp (mode 700, key files 0600); no secret value is ever printed.
+
+## 2026-06-12: days 8-9 stage 1, security audit complete
+
+Full report: docs/AUDIT_DAYS_8_9.md. Nine findings: one HIGH (a trapping
+seller rwa token could strand all bidder deposits by making refund_all
+revert), three MEDIUM (ciphertext griefing voids settlement at zero cost;
+no storage TTL management; privacy claim needed precision about public
+bidder identities), five LOW.
+
+Code fixes: refund_all now refunds deposits unconditionally and the lot
+return leg is a caught try_transfer with a LotReturnFailed event plus a
+permissionless reclaim_lot retry (three new error variants, lot_reclaimed
+flag, three new tests against a stateful BreakableToken double);
+create_auction extends entry and instance TTL to the auction lifetime plus
+a day; clippy lint cleanup. Documentation fixes: MOCKS.md items 7 (bidder
+identities are public, amounts are hidden) and 8 (ciphertext griefing and
+the refund escape hatch), plus the zero-leaf invariant comment on
+address_leaf.
+
+Post-fix verification: clippy -D warnings clean, 23 of 23 cargo tests, 12
+of 12 circuit tests, auction wasm 36958 bytes, and a full e2e.sh testnet
+run exit 0 in 695 s (settle tx 8b9ba1f3c306a11b4714cdb94c5352cc4f4ba8e952
+3f1e17e04d18839b530e85, refund tx 860c0cb1ec33db49f4f4d24fd208ea52bab7c2e
+b57a75f6be3e9135074b8588b). Stage 2 (Vickrey estimate) reported separately;
+N=16 rejected by drew.

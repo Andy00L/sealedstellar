@@ -791,6 +791,195 @@ fn refund_rejects_after_settle() {
 }
 
 // ---------------------------------------------------------------------------
+// Audit fix coverage (2026-06-12 finding 1): a trapping rwa token must never
+// block deposit refunds, and the lot stays reclaimable.
+// ---------------------------------------------------------------------------
+
+// Minimal token double with a breakable transfer. No auth checks: this is a
+// test-only stand-in for a malicious or broken seller token.
+mod breakable_token {
+    use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+
+    #[contracttype]
+    #[derive(Clone)]
+    pub enum TokenKey {
+        Broken,
+        Balance(Address),
+    }
+
+    #[contract]
+    pub struct BreakableToken;
+
+    #[contractimpl]
+    impl BreakableToken {
+        pub fn set_balance(env: Env, holder: Address, amount: i128) {
+            env.storage()
+                .persistent()
+                .set(&TokenKey::Balance(holder), &amount);
+        }
+
+        pub fn set_broken(env: Env, broken: bool) {
+            env.storage().instance().set(&TokenKey::Broken, &broken);
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            let is_broken: bool = env
+                .storage()
+                .instance()
+                .get(&TokenKey::Broken)
+                .unwrap_or(false);
+            if is_broken {
+                panic!("BreakableToken: transfers disabled");
+            }
+            let from_balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&TokenKey::Balance(from.clone()))
+                .unwrap_or(0);
+            let to_balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&TokenKey::Balance(to.clone()))
+                .unwrap_or(0);
+            assert!(from_balance >= amount, "BreakableToken: underfunded");
+            env.storage()
+                .persistent()
+                .set(&TokenKey::Balance(from), &(from_balance - amount));
+            env.storage()
+                .persistent()
+                .set(&TokenKey::Balance(to), &(to_balance + amount));
+        }
+
+        pub fn balance(env: Env, id: Address) -> i128 {
+            env.storage()
+                .persistent()
+                .get(&TokenKey::Balance(id))
+                .unwrap_or(0)
+        }
+    }
+}
+
+struct BreakableWorld {
+    world: TestWorld,
+    auction_id: u64,
+    rwa_address: Address,
+}
+
+fn setup_breakable_lot_auction() -> BreakableWorld {
+    let world = setup_world();
+    let rwa_address = world
+        .env
+        .register(breakable_token::BreakableToken, ());
+    let breakable_client =
+        breakable_token::BreakableTokenClient::new(&world.env, &rwa_address);
+    breakable_client.set_balance(&world.seller, &SELLER_RWA_SUPPLY);
+
+    let auction_id = world.auction_client.create_auction(
+        &world.seller,
+        &rwa_address,
+        &LOT_AMOUNT,
+        &world.payment_token,
+        &MAX_PRICE,
+        &COMMIT_DEADLINE,
+        &GRACE_PERIOD,
+        &decimal_to_u256(&world.env, WHITELIST_ROOT_DECIMAL),
+        &BytesN::from_array(&world.env, &[7u8; 32]),
+    );
+    place_fixture_bids(&world, auction_id);
+    BreakableWorld {
+        world,
+        auction_id,
+        rwa_address,
+    }
+}
+
+#[test]
+fn refund_returns_deposits_even_if_lot_transfer_traps() {
+    let breakable = setup_breakable_lot_auction();
+    let world = &breakable.world;
+    let breakable_client =
+        breakable_token::BreakableTokenClient::new(&world.env, &breakable.rwa_address);
+
+    breakable_client.set_broken(&true);
+    warp_to(world, COMMIT_DEADLINE + GRACE_PERIOD);
+    world.auction_client.refund_all(&breakable.auction_id);
+
+    // Every deposit is back even though the lot leg trapped.
+    for bidder in world.bidders.iter() {
+        assert_eq!(
+            token_balance(&world.env, &world.payment_token, bidder),
+            BIDDER_FUNDING
+        );
+    }
+    let view = world.auction_client.get_auction(&breakable.auction_id);
+    assert_eq!(view.status, AuctionStatus::Refunded);
+    assert!(!view.lot_reclaimed);
+    // The lot is still parked in escrow.
+    assert_eq!(
+        breakable_client.balance(&world.auction_client.address),
+        LOT_AMOUNT
+    );
+
+    // Reclaim while the token is still broken: distinct error.
+    let still_broken = world.auction_client.try_reclaim_lot(&breakable.auction_id);
+    assert_eq!(still_broken, Err(Ok(AuctionError::LotTransferFailed)));
+
+    // Token recovers; the retry hands the lot back to the seller.
+    breakable_client.set_broken(&false);
+    world.auction_client.reclaim_lot(&breakable.auction_id);
+    assert_eq!(breakable_client.balance(&world.seller), SELLER_RWA_SUPPLY);
+    assert!(world
+        .auction_client
+        .get_auction(&breakable.auction_id)
+        .lot_reclaimed);
+
+    let second_reclaim = world.auction_client.try_reclaim_lot(&breakable.auction_id);
+    assert_eq!(second_reclaim, Err(Ok(AuctionError::LotAlreadyReclaimed)));
+}
+
+#[test]
+fn reclaim_rejects_open_and_settled_auctions() {
+    let world = setup_world();
+    let auction_id = create_standard_auction(&world);
+    place_fixture_bids(&world, auction_id);
+
+    let open_reclaim = world.auction_client.try_reclaim_lot(&auction_id);
+    assert_eq!(
+        open_reclaim,
+        Err(Ok(AuctionError::ReclaimRequiresRefundedAuction))
+    );
+
+    warp_to(&world, COMMIT_DEADLINE);
+    world.auction_client.settle(
+        &auction_id,
+        &WINNER_INDEX,
+        &WINNING_PRICE,
+        &deterministic_winner_address(&world.env),
+        &contract_proof(&world.env),
+    );
+    let settled_reclaim = world.auction_client.try_reclaim_lot(&auction_id);
+    assert_eq!(
+        settled_reclaim,
+        Err(Ok(AuctionError::ReclaimRequiresRefundedAuction))
+    );
+}
+
+#[test]
+fn refund_marks_lot_reclaimed_on_the_happy_path() {
+    let world = setup_world();
+    let auction_id = create_standard_auction(&world);
+    place_fixture_bids(&world, auction_id);
+    warp_to(&world, COMMIT_DEADLINE + GRACE_PERIOD);
+    world.auction_client.refund_all(&auction_id);
+    assert!(world.auction_client.get_auction(&auction_id).lot_reclaimed);
+    let reclaim_after_success = world.auction_client.try_reclaim_lot(&auction_id);
+    assert_eq!(
+        reclaim_after_success,
+        Err(Ok(AuctionError::LotAlreadyReclaimed))
+    );
+}
+
+// ---------------------------------------------------------------------------
 // get_auction
 // ---------------------------------------------------------------------------
 
