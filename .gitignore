@@ -18,5 +18,10 @@ node_modules/
 # Local environment files: documented in .env.example, never committed
 .env
 
+# Operator box keys, whitelist member lists, and bid backups for the standing
+# demo instance (decision 2026-06-12, docs/DECISIONS.md). Durable, local-only,
+# never committed, never under /tmp.
+secrets/
+
 # Windows-side metadata that WSL file copies pick up
 *Zone.Identifier

@@ -43,3 +43,12 @@ before submission (plan section 9). Updated 2026-06-12.
    through refund_all (deposits and lot returned). A production deployment
    would instead add a seller reserve price as an extra public input so
    single-bidder auctions can clear at the reserve.
+10. Operational incident (2026-06-12): the operator box secret keys for
+    standing-instance auctions 1 to 5 lived only in /tmp run directories
+    and were lost when /tmp was wiped. Auction 3 settled while its key
+    still existed; auctions 1, 4, and 5 stay on chain as refund-only
+    display data because their ciphertexts can no longer be decrypted,
+    which is exactly the liveness property item 8 describes. Operator keys
+    and whitelist member files now live in the gitignored secrets/
+    directory of the working clone (docs/DECISIONS.md 2026-06-12). Losing
+    an operator key after bids exist still means refund-only, by design.

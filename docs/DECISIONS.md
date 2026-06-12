@@ -441,3 +441,69 @@ length (13), and every other index are unchanged.
   circuit header, settle doc comment, e2e header, prover output): no bid
   amount is ever revealed, including the winner's; the public clearing
   price is by construction a losing bid's value.
+
+## 2026-06-12: operator keys lost, durable secrets policy, auction 6 staged
+
+Incident and triage:
+
+- The operator box secret keys for standing-instance auctions 1 and 2
+  (pubkey c5f89bad2046f5bc7fb28de98bb6252395e799e889b9380cc27c07cdb6766f73)
+  and auctions 3 to 5 (pubkey
+  1b93435ac94f523e21e91030c7d231e6a3e615d6cce6fa525523a8938fb6201b) were
+  written only to /tmp run directories during the milestone 3 and 4 seeding
+  sessions. /tmp was wiped; repo and home searches found no copy and drew
+  confirmed no backup exists. Those ciphertexts are undecryptable, so no
+  settlement proof can ever be built for them (MOCKS.md item 10).
+- Drew's decision: auctions 1, 4, 5 are refund-only display data. Auction 2
+  is already Refunded, auction 3 already Settled (its key existed then).
+- The auctions 1-2 whitelist member set is also unrecovered: candidate
+  rebuilds (m3 bidders with and without extras) did not reproduce the root.
+  The auctions 3-5 root was reproduced exactly from den-bidder-1781249681-0
+  through -3, confirming the frozen leaf mapping end to end:
+  7285369336936725010783038142064730785917129625026504674391291409239583684332
+- GA776VA5B3BFZK6VFXRKATDWYRKVSB6NIZOQ75GQ2VM2RTPTIQTYEH63 (two bids on
+  auction 1) is not drew's wallet; per drew's instruction it is treated as
+  the milestone 4 headless test account. No local alias resolves to it, so
+  this stays an assumption, recorded as such.
+
+New policy (drew's GO, this session): operator key files, whitelist member
+JSONs, and bid backups live in the repo's gitignored secrets/ directory
+(directory mode 700, key files 0600), never under /tmp. .gitignore gained
+the secrets/ entry. Current contents:
+
+- secrets/operator-box-key.json: operator box keypair for auction 6 onward,
+  public key e2b45dd934b5429480a66d52b2c450df53b045ce4a89945a3e4f9bb121620806
+- secrets/whitelist-demo.json: 5 members in leaf order den-bidder 0, 1, 2,
+  3, then drew's Freighter account; root
+  7829413812738142148428060192973865116993317583932259641789823669695683933144
+- secrets/bids/a6-den{0..3}.json: den bid backups (price and salt; also
+  recoverable from chain events with the operator key)
+
+Drew's Freighter bidder account
+GDIVCF6NSGSOXSFOU7H4DUDLOYMERGDKZWMPNVQM6VFNVR26B67FJQBH:
+
+- friendbot funded 10000 XLM, tx
+  c0837f8fe39b692fcb241e2a0e4ddc8fb9b27ce460043ae5c9d0f1a73dde2c60
+- tUSDC trustline added by drew in Freighter, verified on Horizon
+- minted 100000 tUSDC (two full deposits at max_price 50000)
+- top-up mints the same session: 70000 tBENJI to drew-dev (lot escrow
+  headroom), 31000 tUSDC to den-bidder 1 (back to the uniform 60000)
+
+Auction 6, staged for the frontend bidder click test (standing instance
+CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4):
+
+- seller drew-dev, lot 50000 tBENJI, max_price 50000 tUSDC, commit_deadline
+  epoch 1781301323 (2026-06-12 17:55:23 EDT, a 90 minute window), grace
+  86400 s, create tx
+  6da1caf604617f5b7943216f088d54b6fdf650221f7334eb02a6e7b9ac206d67
+- den competition bids sealed in slots 0 to 3 at 18000, 27000, 31000,
+  12000; txs
+  bf2afe60c646c773fb08403b04990cc3fe3bdaeae2b7f1055d123b78ae4d01db,
+  241920a736dfea87ea1958dfb8af252aa5e58595553492f1621c391e0a35887f,
+  4aed1dc514fcf16188526543b6c935f7032d63f826f70ecd8e50d0407d11c59b,
+  d02b44a6b4be99814b8d72dba11237fd833f22de67de741983a35d6572755000
+- The bid values are recorded here on purpose: this is a staged test
+  auction, we are its operator, and the click test needs a predictable
+  outcome. A bid strictly above 31000 from the Freighter account wins and
+  clears at 31000 (strict-max rule over lower slots). The demo video
+  auction will be staged fresh; nothing here pre-reveals it.
