@@ -5,11 +5,15 @@ include "circomlib/circuits/bitify.circom";
 include "lib/commitment.circom";
 include "lib/merkle.circom";
 
-// SealedStellar winner statement, plan section 2.6. Proves, without opening
-// losing bids: the commitments bind the private prices for this auction, the
-// winner slot holds the maximum price (lowest index wins ties), the public
-// winning price equals that slot's price and is nonzero, and the winner
-// address leaf is a member of the whitelist tree.
+// SealedStellar winner statement, plan section 2.6 with the Vickrey pricing
+// amendment (docs/DECISIONS.md 2026-06-13). Proves, without opening ANY bid,
+// including the winner's: the commitments bind the private prices for this
+// auction, the winner slot holds the maximum price (lowest index wins ties),
+// the public winning price equals the SECOND-highest price (the best bid
+// among the non-winner slots) and is nonzero, and the winner address leaf is
+// a member of the whitelist tree. With fewer than two positive-price bids
+// the second price is 0 and no witness exists: such auctions cannot settle
+// and fall to the refund path (rule b).
 template AuctionWinner(bidCount, merkleDepth) {
     // Public inputs. Order FROZEN in docs/DECISIONS.md (2026-06-12); the
     // contract rebuilds public.json in exactly this order at settle.
@@ -76,10 +80,33 @@ template AuctionWinner(bidCount, merkleDepth) {
     signal selectedPrice;
     selectedPrice <== selectedPriceTotal;
 
-    // 4. The public winning price equals the selected slot's price and is
-    //    nonzero. Empty slots hold price 0, so this also blocks an empty
-    //    slot from winning (plan section 2.6).
-    winningPrice === selectedPrice;
+    // 4. Vickrey clearing price: the public winningPrice is the maximum
+    //    price among the NON-winner slots (second price). The winner's own
+    //    bid never appears in the public signals. otherPrices zeroes out the
+    //    winner slot; empty slots already hold price 0.
+    signal otherPrices[bidCount];
+    signal runningSecondMax[bidCount];
+    component secondMaxCompare[bidCount - 1];
+    for (var bidIndex = 0; bidIndex < bidCount; bidIndex++) {
+        otherPrices[bidIndex] <== bidPrices[bidIndex] * (1 - indicators[bidIndex]);
+    }
+    runningSecondMax[0] <== otherPrices[0];
+    for (var bidIndex = 1; bidIndex < bidCount; bidIndex++) {
+        secondMaxCompare[bidIndex - 1] = GreaterEqThan(64);
+        secondMaxCompare[bidIndex - 1].in[0] <== runningSecondMax[bidIndex - 1];
+        secondMaxCompare[bidIndex - 1].in[1] <== otherPrices[bidIndex];
+        // out == 1 keeps the running value, out == 0 takes the new price.
+        runningSecondMax[bidIndex] <== otherPrices[bidIndex]
+            + secondMaxCompare[bidIndex - 1].out
+                * (runningSecondMax[bidIndex - 1] - otherPrices[bidIndex]);
+    }
+
+    winningPrice === runningSecondMax[bidCount - 1];
+    // Nonzero clearing price doubles as rule b: with fewer than two
+    // positive-price bids the second max is 0 and settlement is unprovable.
+    // It also keeps empty or zero-price slots from winning: a winner with
+    // price 0 forces every other slot to 0 (maximality), hence a 0 second
+    // price, rejected here.
     component winningPriceIsZero = IsZero();
     winningPriceIsZero.in <== winningPrice;
     winningPriceIsZero.out === 0;

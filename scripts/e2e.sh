@@ -9,7 +9,9 @@
 #   3. creates auction 1, places 8 sealed bids (circomlibjs commitment +
 #      tweetnacl ciphertext in the event), creates auction 2 with 3 bids,
 #   4. as the operator: fetches the bid events, decrypts, proves with the
-#      committed zkey, settles auction 1 on testnet,
+#      committed zkey, settles auction 1 on testnet (Vickrey: the winner
+#      pays the second-highest price; no bid value is ever revealed,
+#      including the winner's),
 #   5. asserts the exact final token balances of all 10 money-touching
 #      accounts (8 bidders, seller, auction contract),
 #   6. waits out the grace period and runs refund_all on auction 2, then
@@ -35,10 +37,12 @@ HORIZON_URL="https://horizon-testnet.stellar.org"
 LOT_AMOUNT=1000
 MAX_PRICE=500000
 BIDDER_FUNDING_USDC=1000000
-# Bid prices for auction 1; unique maximum 350000 at slot 2.
+# Bid prices for auction 1; unique maximum 350000 at slot 2. Vickrey: the
+# public clearing price is the second-highest bid, 310000 at slot 4; the
+# winning bid value itself never appears anywhere public.
 BID_PRICES=(120000 280000 350000 200000 310000 90000 150000 260000)
 EXPECTED_WINNER_INDEX=2
-EXPECTED_WINNING_PRICE=350000
+EXPECTED_WINNING_PRICE=310000
 # Auction 2 (refund path) bid prices, 3 bidders.
 REFUND_BID_PRICES=(110000 90000 130000)
 

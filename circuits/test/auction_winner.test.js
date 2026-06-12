@@ -9,6 +9,7 @@ const {
   computeBidCommitment,
   buildHonestFixture,
   recomputeCommitmentsForAuction,
+  selectVickreyOutcome,
   fixtureSalt,
 } = require('./helpers.js');
 
@@ -64,28 +65,59 @@ describe('auction_winner circuit (plan section 2.6)', function describeAuctionWi
     assert.deepEqual(publicSignals, expectedOrder);
   });
 
-  it('accepts a full house of eight real bids', async function fullHouse() {
+  it('accepts a full house of eight real bids at the second price', async function fullHouse() {
     const { input, meta } = buildHonestFixture(hasher);
     const fullPrices = [1200n, 3500n, 990n, 2750n, 3100n, 800n, 1n, 2100n];
     input.bidPrices = fullPrices.map((bidPrice) => bidPrice.toString());
     input.commitments = fullPrices.map((bidPrice, bidIndex) =>
       computeBidCommitment(hasher, bidPrice, meta.bidSalts[bidIndex], meta.auctionId).toString(),
     );
+    const outcome = selectVickreyOutcome(fullPrices);
+    input.winnerIndex = outcome.winnerIndex.toString();
+    input.winningPrice = outcome.clearingPrice.toString();
     await expectAccepted(input);
   });
 
-  it('rejects a wrong winner index even with that slot price as winning price', async function wrongWinner() {
+  it('rejects a wrong winner index even with a consistent second price', async function wrongWinner() {
     const { input } = buildHonestFixture(hasher);
-    // Slot 4 holds 3100, not the maximum 3500 at slot 1.
+    // Slot 4 holds 3100, not the maximum 3500 at slot 1. With slot 4 as the
+    // claimed winner the second price among the others would be 3500, so
+    // only the maximality constraint is violated.
     input.winnerIndex = '4';
-    input.winningPrice = '3100';
+    input.winningPrice = '3500';
     await expectRejected(input, 'slot 4 is not the maximum bid');
   });
 
   it('rejects an inflated winning price', async function inflatedPrice() {
     const { input } = buildHonestFixture(hasher);
     input.winningPrice = '3600';
-    await expectRejected(input, 'winning price above the selected bid');
+    await expectRejected(input, 'winning price above the second-highest bid');
+  });
+
+  it('rejects the winner own bid as the public price (Vickrey)', async function ownBidNotClearing() {
+    const { input } = buildHonestFixture(hasher);
+    // The winner bid 3500; the only provable public price is 3100.
+    input.winningPrice = '3500';
+    await expectRejected(input, 'the winner bid must never become the clearing price');
+  });
+
+  it('rejects a single positive bid under rule b', async function singleBid() {
+    const { input, meta } = buildHonestFixture(hasher);
+    const lonePrices = [2750n, 0n, 0n, 0n, 0n, 0n, 0n, 0n];
+    input.bidPrices = lonePrices.map((bidPrice) => bidPrice.toString());
+    input.commitments = lonePrices.map((bidPrice, bidIndex) => {
+      if (bidIndex === 0) {
+        return computeBidCommitment(hasher, bidPrice, meta.bidSalts[bidIndex], meta.auctionId).toString();
+      }
+      return '0';
+    });
+    input.winnerIndex = '0';
+
+    // No second price exists: neither the own bid nor zero can settle.
+    const ownBidStory = { ...input, winningPrice: '2750' };
+    await expectRejected(ownBidStory, 'single bid cannot clear at its own price');
+    const zeroStory = { ...input, winningPrice: '0' };
+    await expectRejected(zeroStory, 'single bid cannot clear at zero');
   });
 
   it('rejects a commitment mismatch', async function commitmentMismatch() {
@@ -106,7 +138,7 @@ describe('auction_winner circuit (plan section 2.6)', function describeAuctionWi
     await expectRejected(input, 'zero winning price');
   });
 
-  it('gives a tie to the lowest index and rejects the higher one', async function tieBreak() {
+  it('ties: lowest index wins and the clearing price equals the tied bid', async function tieBreak() {
     const honest = buildHonestFixture(hasher);
     const tiePrices = [1200n, 3500n, 990n, 3500n, 3100n, 0n, 0n, 0n];
     const tieCommitments = tiePrices.map((bidPrice, bidIndex) => {
@@ -116,6 +148,8 @@ describe('auction_winner circuit (plan section 2.6)', function describeAuctionWi
       return computeBidCommitment(hasher, bidPrice, honest.meta.bidSalts[bidIndex], honest.meta.auctionId).toString();
     });
 
+    // Top tie at 3500: the second price among non-winner slots is the other
+    // 3500, so the clearing price equals the winning bid value here.
     const lowerIndexInput = { ...honest.input };
     lowerIndexInput.bidPrices = tiePrices.map((bidPrice) => bidPrice.toString());
     lowerIndexInput.commitments = tieCommitments;

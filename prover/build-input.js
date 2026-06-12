@@ -15,6 +15,7 @@ const fs = require('fs');
 const {
   createPoseidonHasher,
   PoseidonMerkleTree,
+  selectVickreyOutcome,
   BID_SLOT_COUNT,
   MERKLE_DEPTH,
 } = require('../circuits/test/helpers.js');
@@ -47,22 +48,28 @@ function parseCliArguments(argv) {
   return { ok: true, value: options };
 }
 
+// Vickrey selection through the shared helper: winner is the maximum price
+// (lowest slot on ties), the public clearing price is the second-highest.
 function selectWinner(bids) {
-  let winnerIndex = -1;
-  let winnerPrice = -1n;
+  const paddedPrices = Array.from({ length: BID_SLOT_COUNT }, () => 0n);
   for (const bid of bids) {
-    const bidPrice = BigInt(bid.priceDecimal);
-    // Strict greater-than keeps the lowest index on equal prices, matching
-    // the circuit tie-break (plan section 2.4).
-    if (bidPrice > winnerPrice) {
-      winnerPrice = bidPrice;
-      winnerIndex = bid.slotIndex;
-    }
+    paddedPrices[bid.slotIndex] = BigInt(bid.priceDecimal);
   }
-  if (winnerIndex < 0 || winnerPrice <= 0n) {
+  const outcome = selectVickreyOutcome(paddedPrices);
+  if (outcome.winnerIndex < 0 || outcome.winnerPrice <= 0n) {
     return { ok: false, reason: 'no positive-price bid found' };
   }
-  return { ok: true, value: { winnerIndex, winnerPrice } };
+  if (outcome.clearingPrice <= 0n) {
+    return {
+      ok: false,
+      reason:
+        'fewer than two positive-price bids: the Vickrey clearing price is zero and the auction cannot settle (rule b, refund path)',
+    };
+  }
+  return {
+    ok: true,
+    value: { winnerIndex: outcome.winnerIndex, clearingPrice: outcome.clearingPrice },
+  };
 }
 
 async function main() {
@@ -98,7 +105,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const { winnerIndex, winnerPrice } = winnerResult.value;
+  const { winnerIndex, clearingPrice } = winnerResult.value;
   const winnerBid = bids.find((bid) => bid.slotIndex === winnerIndex);
 
   const memberIndex = whitelistDocument.members.findIndex(
@@ -149,7 +156,7 @@ async function main() {
     auctionId: BigInt(decryptedDocument.auctionId).toString(),
     commitments: paddedCommitments,
     winnerIndex: winnerIndex.toString(),
-    winningPrice: winnerPrice.toString(),
+    winningPrice: clearingPrice.toString(),
     whitelistRoot: whitelistDocument.rootDecimal,
     winnerAddrHash: whitelistDocument.members[memberIndex].leafDecimal,
     bidPrices: paddedPrices,
@@ -160,7 +167,7 @@ async function main() {
   const settleMeta = {
     auctionId: decryptedDocument.auctionId,
     winnerIndex,
-    winningPrice: winnerPrice.toString(),
+    winningPrice: clearingPrice.toString(),
     winnerAddress: winnerBid.bidder,
   };
 
@@ -175,9 +182,10 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  // The winner becomes public at settle; losing prices stay in files.
+  // Only the clearing price (second-highest bid) becomes public at settle.
+  // No bid value is printed: not the losers' and not the winner's.
   console.log(
-    `[main] winner slot ${winnerIndex} at price ${winnerPrice} (input and settle meta written)`,
+    `[main] winner slot ${winnerIndex}, clearing price ${clearingPrice} (input and settle meta written)`,
   );
 }
 

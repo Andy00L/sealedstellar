@@ -90,6 +90,29 @@ class PoseidonMerkleTree {
   }
 }
 
+// Vickrey outcome (docs/DECISIONS.md 2026-06-13 freeze): the winner holds
+// the maximum price (lowest slot wins ties); the public clearing price is
+// the highest price among the OTHER slots (second price). With fewer than
+// two positive-price bids the clearing price is 0 and the auction cannot
+// settle (rule b: it falls to the refund path).
+function selectVickreyOutcome(bidPrices) {
+  let winnerIndex = -1;
+  let winnerPrice = -1n;
+  bidPrices.forEach((bidPrice, slotIndex) => {
+    if (BigInt(bidPrice) > winnerPrice) {
+      winnerPrice = BigInt(bidPrice);
+      winnerIndex = slotIndex;
+    }
+  });
+  let clearingPrice = 0n;
+  bidPrices.forEach((bidPrice, slotIndex) => {
+    if (slotIndex !== winnerIndex && BigInt(bidPrice) > clearingPrice) {
+      clearingPrice = BigInt(bidPrice);
+    }
+  });
+  return { winnerIndex, winnerPrice, clearingPrice };
+}
+
 // Deterministic 31-byte test salts (not secrets): byte value bidIndex + 1
 // repeated 31 times, well below the 2^248 salt bound.
 function fixtureSalt(bidIndex) {
@@ -113,8 +136,11 @@ function buildHonestFixture(hasher, options = {}) {
   const bidPrices = [1200n, 3500n, 990n, 2750n, 3100n, 0n, 0n, 0n];
   const emptySlots = [false, false, false, false, false, true, true, true];
   const bidSalts = bidPrices.map((unusedPrice, bidIndex) => fixtureSalt(bidIndex));
-  const winnerIndex = 1n;
-  const winningPrice = 3500n;
+  // Winner slot 1 at 3500; the public clearing price is the second-highest
+  // bid, 3100 (Vickrey, docs/DECISIONS.md 2026-06-13).
+  const vickreyOutcome = selectVickreyOutcome(bidPrices);
+  const winnerIndex = BigInt(vickreyOutcome.winnerIndex);
+  const winningPrice = vickreyOutcome.clearingPrice;
 
   const commitments = bidPrices.map((bidPrice, bidIndex) => {
     if (emptySlots[bidIndex]) {
@@ -176,6 +202,7 @@ module.exports = {
   computeBidCommitment,
   computeAddressLeaf,
   PoseidonMerkleTree,
+  selectVickreyOutcome,
   fixtureSalt,
   fixtureAddressKey,
   buildHonestFixture,

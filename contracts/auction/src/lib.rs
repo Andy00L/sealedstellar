@@ -354,6 +354,12 @@ impl SealedAuction {
     /// can never supply the commitments or the auction id (plan section 2.7).
     /// Permissionless by design: the proof is the authority
     /// (docs/DECISIONS.md 2026-06-12).
+    ///
+    /// winning_price is the Vickrey CLEARING price: the highest bid among
+    /// the non-winner slots (docs/DECISIONS.md 2026-06-13). The winner's own
+    /// bid never becomes public; the proof attests the clearing price is
+    /// the true second price. With fewer than two positive bids no valid
+    /// proof exists and the auction can only end through refund_all.
     pub fn settle(
         env: Env,
         auction_id: u64,

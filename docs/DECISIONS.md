@@ -379,3 +379,65 @@ run exit 0 in 695 s (settle tx 8b9ba1f3c306a11b4714cdb94c5352cc4f4ba8e952
 3f1e17e04d18839b530e85, refund tx 860c0cb1ec33db49f4f4d24fd208ea52bab7c2e
 b57a75f6be3e9135074b8588b). Stage 2 (Vickrey estimate) reported separately;
 N=16 rejected by drew.
+
+## 2026-06-13: AMENDED FREEZE, public signal index 10 is the Vickrey price
+
+Supersedes the 2026-06-12 freeze for index 10 ONLY. The vector shape,
+length (13), and every other index are unchanged.
+
+- Index 10, winning_price, now means the CLEARING price: the highest price
+  among the non-winner slots (second price). The winner pays it; the
+  winner's own bid value never appears in any public signal, event, log,
+  or argument. No bid amount is ever revealed on chain, the winner's
+  included; the clearing price is by construction some LOSING bid's value.
+- In-circuit: a second-max fold over the non-winner slots (otherPrices
+  zero out the winner via the one-hot indicators; 7 GreaterEqThan(64)
+  comparators chain the maximum), then winningPrice === secondMax and
+  winningPrice != 0.
+- Degenerate rule (b), drew's decision 2026-06-13: with fewer than two
+  positive-price bids the second max is 0, the nonzero constraint makes
+  settlement unprovable, and the auction can only end through refund_all.
+  The production alternative (a seller reserve price as an extra public
+  input) is recorded in docs/MOCKS.md.
+- The winner still holds the strict maximum with the lowest-index
+  tie-break; on a top tie the clearing price equals the tied value.
+- Contract interface unchanged: settle's winning_price argument now
+  carries the clearing price; the existing checks (positive, at most
+  max_price) apply unchanged.
+
+## 2026-06-13: days 8-9 stage 2 DONE, Vickrey live end to end on testnet
+
+- Circuit: second-max fold added; measured compile 6699 non-linear plus
+  5594 linear constraints (12293 total, up 498 from first-price), still 13
+  public inputs and inside pot14 with 4091 to spare. 14 of 14 circuit
+  tests green, including the two new cases: the winner's own bid rejected
+  as the public price, and the single-positive-bid auction unprovable
+  under rule (b) in both price stories; the top-tie case clears at the
+  tied value.
+- New single-contribution ceremony (SEALEDSTELLAR_FORCE_SETUP=1):
+  aw_final.zkey is now 5655954 bytes, vkey.json regenerated, both
+  recommitted. alpha, beta, gamma unchanged (phase 1), delta and all 14 IC
+  points new. Contract and demo fixture proofs regenerated; cargo 23 of 23
+  and clippy -D warnings clean against the new material.
+- Standing reference instances for the days 10-12 frontend (drew-dev):
+  verifier CD7PHFDZMHHCN25FKCERAFVXQC77CQOF55YP57VU3WEVPDY7RCNH6EGO,
+  auction CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4
+  (deploy txs a23fe8a8d451084068297e32667170931f9db967f4c7a492556a88534ef5
+  c5d0 and 4d0e0252fa4d01971196c1a1866b2f1f8654ace9f418abdb22e7fb7ad7c570
+  38). Earlier first-price instances remain on chain as history only.
+- e2e.sh green twice in a row with the winner paying the second price
+  (clearing 310000, winning bid 350000 never revealed):
+  run A exit 0 in 681 s, settle tx
+  66e9803e10c4627d318a756ff3126d1b2b011eb9cef9e894b376404cb7eb1315,
+  refund tx
+  f01e859954cdfecf0a4a5ee5280e95d0e9b0b05df497b4bd39470fae7d63bee0;
+  run B exit 0 in 677 s, settle tx
+  8f322a10eea95b17bc0e6c8b8b6e49775b3a52f474d7b875dac056c034ea1156,
+  refund tx
+  dc41ae4459576ae152613d539780f27d71b797ea679b4262b7b6e1312e67111d.
+  Seller received exactly 310000, the winner paid exactly 310000 net and
+  holds the lot, every loser was made whole, the contract ended at zero.
+- Privacy claim updated everywhere it appears (MOCKS items 7 and 9,
+  circuit header, settle doc comment, e2e header, prover output): no bid
+  amount is ever revealed, including the winner's; the public clearing
+  price is by construction a losing bid's value.

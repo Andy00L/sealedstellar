@@ -25,10 +25,12 @@ before submission (plan section 9). Updated 2026-06-12.
    demo video is decided on days 10-12; if any demo proof comes from the CLI,
    this file will say so.
 7. Bidder IDENTITIES are public: place_bid transactions are signed and the
-   BidPlaced events name the bidder. What stays hidden is every bid AMOUNT
-   (losing amounts forever, on chain). "Losing bidders are never identified"
-   in the whitelist design means the proof never links losers to the KYC
-   tree, not that their participation is invisible.
+   BidPlaced events name the bidder. What stays hidden is every bid AMOUNT,
+   the winner's included: settlement reveals only the Vickrey clearing
+   price (the second-highest bid, by construction a losing bid's value).
+   "Losing bidders are never identified" in the whitelist design means the
+   proof never links losers to the KYC tree, not that their participation
+   is invisible.
 8. Settlement liveness depends on every ciphertext being decryptable: a
    bidder who posts garbage ciphertext (or a seller who sets a wrong
    operator key) makes the winner proof impossible, and the auction falls
@@ -36,3 +38,8 @@ before submission (plan section 9). Updated 2026-06-12.
    This griefing costs the attacker nothing at hackathon scale.
    Production-grade fixes (verifiable encryption of the bid inside the
    proof, or a reveal-or-slash bond) are listed as future work.
+9. Vickrey degenerate rule (b): an auction with fewer than two
+   positive-price bids has no second price, cannot settle, and ends
+   through refund_all (deposits and lot returned). A production deployment
+   would instead add a seller reserve price as an extra public input so
+   single-bidder auctions can clear at the reserve.
