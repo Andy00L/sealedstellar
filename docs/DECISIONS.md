@@ -211,3 +211,96 @@ addresses on chain; the circuit and this freeze are unaffected either way.
 - The days 1-2 spike instance (CAEXSNOU...) keeps the spike vkey and stays
   untouched as the gate record; the auction contract (days 5-6) will call
   the new CDQFIRJY... instance.
+
+## 2026-06-12: Poseidon on-chain decision (days 5-6, GO decision 1)
+
+- Finding: the CAP-0075 host function is a fully parameterized permutation
+  (caller supplies t, d, round counts, MDS matrix, and all round constants);
+  it bakes in no parameter set, so host-vs-circomlib mismatch is not a
+  property of the host. The preview-era poseidon_hash wrapper moved into the
+  stellar library rs-soroban-poseidon, whose README and test suite state and
+  assert "BN254 matches circomlib" (the circom Poseidon([1, 2]) vector).
+- Choice: depend on soroban-poseidon, pinned to git revision
+  b4bf706b7d0d602f9389280d259c0fb9f19983bf, and compute the winner leaf on
+  chain at settle. The stored-leaf fallback was not needed.
+- Evidence in contracts/auction tests: poseidon_matches_circomlib_vector
+  (hash([1, 2]) equals the circomlib value) and
+  address_leaf_matches_js_fixture (the on-chain leaf for the deterministic
+  winner address equals the value circomlibjs computed in the JS fixture).
+- Leaf input bytes are the 32-byte tail of the ScAddress XDR: the ed25519
+  public key for G accounts (the frozen mapping) and the contract id for C
+  addresses, hashed as two big-endian 128-bit halves either way.
+- The library's crates.io soroban-sdk requirement is redirected to our
+  pinned sdk git revision via [patch.crates-io] so one sdk build exists.
+
+## 2026-06-12: zkey distribution policy (days 5-6, GO decision 2)
+
+- circuits/build/aw_final.zkey is 5436794 bytes, far under the 50 MB line,
+  so the zkey and build/vkey.json are committed (gitignore negation). A
+  regenerated zkey cannot verify against the deployed verifier instance.
+- scripts/setup.sh now refuses to overwrite an existing aw_final.zkey unless
+  SEALEDSTELLAR_FORCE_SETUP=1, to protect the deployed-vkey match.
+- The single-contribution ceremony weakness is recorded in docs/MOCKS.md.
+
+## 2026-06-12: days 5-6 milestone DONE, auction contract live on testnet
+
+Interface notes (plan conflicts resolved toward section 2.7):
+
+- The plan section 5 sketch lists a settle parameter named
+  merkle_proof_unused_on_chain. Sections 2.7 and 7 state the caller supplies
+  only winner_index, winning_price, winner_address, and proof bytes. The
+  parameter is dropped: an argument nothing reads violates the dead-code
+  rule, and the plan's own frozen protocol section excludes it.
+- winner_address stays an argument per the plan interface but storage is the
+  authority: settle fails with WinnerAddressMismatch unless it equals
+  bids[winner_index].bidder. The leaf is computed from the stored bidder.
+- get_auction returns the stored Auction struct directly instead of a
+  duplicate AuctionView type (same fields, no copy drift).
+- The verifier client uses a structural twin of the deployed Proof type;
+  field names a, b, c mirror the deployed verifier ABI and stay single
+  letters deliberately (renaming would break the on-chain instance).
+
+Design decisions:
+
+- The lot is escrowed at create_auction, not at settle, so settlement can
+  never fail on a missing seller balance and no path half-moves funds.
+  refund_all returns the lot along with every deposit.
+- settle and refund_all are permissionless by design: the proof or the
+  clock is the authority (plan section 7 documentation requirement).
+- Auction ids start at 1. Commitment 0 is rejected from place_bid (reserved
+  empty-slot marker). Encrypted bids cap at 256 bytes. max_price must fit
+  64 bits (circuit range), grace_period must be nonzero.
+- Settled state is written before transfers within the single atomic
+  invocation (idempotency flag per plan section 2.7).
+- Events migrated to the sdk 26 #[contractevent] macro (the tuple publish
+  API is deprecated at the pinned revision). BidPlaced carries the
+  tweetnacl ciphertext per plan section 2.2.
+
+Evidence:
+
+- cargo test: 17 of 17 green. The happy path settles with the REAL groth16
+  proof through the real verifier crate and asserts conservation to the
+  stroop (contract ends at zero balance in both tokens; seller, winner, and
+  every loser hit exact expected balances).
+- cross_auction_replay_proof_rejected: the auction 1 proof replayed on an
+  identical auction 2 fails with ProofInvalid (auction_id is rebuilt from
+  storage, never caller-supplied).
+- settle_rejects_proof_for_a_different_statement (the days 3-4 demo proof,
+  valid material for auction 42) fails with ProofInvalid; tampered proof
+  bytes fail with VerifierCallFailed (distinct failure modes).
+- Fixture provenance: circuits/scripts/make-contract-fixture.js binds the
+  proof to auction_id 1 and winner key bytes 0x42 repeated;
+  build/contract_args.json holds the soroban-formatted material.
+- Testnet deployments (drew-dev):
+  - tBENJI SAC: CDUTXMK5MGOXSBUPZNQZ6J5RCQEVC4MOMYW72WXVUWV5W7OCXJIGJUGN
+  - tUSDC SAC: CDIKPNCUSBHSTGD5GZKKHPK6BVE732BUCKQ3EPLYMSLUSHEZPAFTNPVX
+    (issuer GDYLKSRXQZ7Y2Y44HDKVXB74WSXFRZRMGHKGG5XXO7ZFOWU7HWVYRR3G,
+    alias token-issuer; recorded in docs/MOCKS.md)
+  - Auction contract (wasm 34803 bytes, wired to verifier CDQFIRJY...):
+    CDAOIR2ZR2VOXMWQGGDD4K5NUD2AU4MTNDPYOA6IEDIXA3N6YLL5KX3B
+    deploy tx
+    f3946e514672e3f28a6fd7396f7a232567cbee7ab490c88ce93afe80a817cb41
+  - Sanity invoke get_auction(99) returns Error(Contract, #1)
+    (AuctionNotFound), confirming the error surface on chain.
+- Next: day 7 e2e.sh (fresh deploys, 8 funded identities, decrypt, prove,
+  settle, balance assertions, refund path).

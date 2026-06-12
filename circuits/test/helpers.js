@@ -103,9 +103,13 @@ function fixtureAddressKey(memberIndex) {
 }
 
 // Canonical honest fixture: 5 real bids, 3 empty slots, unique maximum at
-// slot 1, winner whitelisted at leaf 3 of a 6-member tree.
-function buildHonestFixture(hasher) {
-  const auctionId = 42n;
+// slot 1, winner whitelisted at leaf 3 of a 6-member tree. Options override
+// the auction id and the winner's 32 address key bytes (used by
+// scripts/make-contract-fixture.js to bind the proof to the auction
+// contract's first auction id and its deterministic test winner address).
+function buildHonestFixture(hasher, options = {}) {
+  const auctionId = options.auctionId !== undefined ? BigInt(options.auctionId) : 42n;
+  const winnerAddressKeyBytes = options.winnerAddressKeyBytes || fixtureAddressKey(3);
   const bidPrices = [1200n, 3500n, 990n, 2750n, 3100n, 0n, 0n, 0n];
   const emptySlots = [false, false, false, false, false, true, true, true];
   const bidSalts = bidPrices.map((unusedPrice, bidIndex) => fixtureSalt(bidIndex));
@@ -120,7 +124,7 @@ function buildHonestFixture(hasher) {
   });
 
   const whitelistLeaves = Array.from({ length: 6 }, (unusedLeaf, memberIndex) =>
-    computeAddressLeaf(hasher, fixtureAddressKey(memberIndex)),
+    computeAddressLeaf(hasher, memberIndex === 3 ? winnerAddressKeyBytes : fixtureAddressKey(memberIndex)),
   );
   const whitelistTree = new PoseidonMerkleTree(hasher, MERKLE_DEPTH, whitelistLeaves);
   const winnerLeafIndex = 3;

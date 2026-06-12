@@ -11,6 +11,16 @@ if [ ! -f "$PTAU_FILE" ]; then
   exit 1
 fi
 
+# Guard (decision 2026-06-12, docs/DECISIONS.md): the committed zkey matches
+# the verifier instance deployed on testnet. Regenerating it silently would
+# break every on-chain verification until a new instance is deployed.
+if [ -f build/aw_final.zkey ] && [ "${SEALEDSTELLAR_FORCE_SETUP:-0}" != "1" ]; then
+  echo "[setup] build/aw_final.zkey exists; a regenerated zkey cannot verify" >&2
+  echo "[setup] against the deployed verifier. Re-run with" >&2
+  echo "[setup] SEALEDSTELLAR_FORCE_SETUP=1 only if you plan to redeploy." >&2
+  exit 1
+fi
+
 echo "[setup] groth16 setup"
 snarkjs groth16 setup build/auction_winner.r1cs "$PTAU_FILE" build/aw_0000.zkey
 

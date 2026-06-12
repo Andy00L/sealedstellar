@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["verifier"]
+members = ["verifier", "auction"]
 
 [workspace.dependencies]
 # crypto::bn254 (CAP-0074, CAP-0080; live on testnet since Protocol 25/26) is
@@ -9,6 +9,18 @@ members = ["verifier"]
 # rs-soroban-sdk main revision of 2026-06-08 instead.
 # sourceRef: ~/ref/soroban-examples-p25-preview/p25-preview/Cargo.toml (same
 # git-pin pattern, older revision).
+soroban-sdk = { git = "https://github.com/stellar/rs-soroban-sdk", rev = "caddc8c367e8fd66a2a5962bcb0ca4850c23bf4a" }
+
+# Poseidon hash wrapper over the CAP-0075 host permutation. Its README and
+# test suite state BN254 parameters match circomlib (verified against the
+# circom Poseidon([1, 2]) vector; see docs/DECISIONS.md 2026-06-12).
+# sourceRef: ~/ref/rs-soroban-poseidon (tarball of the pinned revision).
+soroban-poseidon = { git = "https://github.com/stellar/rs-soroban-poseidon", rev = "b4bf706b7d0d602f9389280d259c0fb9f19983bf" }
+
+# soroban-poseidon depends on soroban-sdk from crates.io; redirect that
+# requirement to the same pinned git revision so exactly one soroban-sdk
+# build exists in the graph.
+[patch.crates-io]
 soroban-sdk = { git = "https://github.com/stellar/rs-soroban-sdk", rev = "caddc8c367e8fd66a2a5962bcb0ca4850c23bf4a" }
 
 # Profile copied from the upstream example workspace.

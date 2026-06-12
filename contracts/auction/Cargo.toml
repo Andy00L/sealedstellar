@@ -1,0 +1,25 @@
+[package]
+name = "sealedstellar-auction"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+soroban-poseidon = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+# Dev-only: registers the real Groth16 verifier in tests so settle runs
+# against real proofs. Dev dependencies never link into the cdylib, so the
+# verifier's wasm exports cannot collide with this contract's.
+sealedstellar-verifier = { path = "../verifier" }
+# Builds the deterministic winner strkey from raw ed25519 bytes in tests.
+# Same version the sdk dependency tree already compiles.
+stellar-strkey = "0.0.16"
+hex = "0.4"
+num-bigint = "0.4"
