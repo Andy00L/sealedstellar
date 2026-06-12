@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["verifier"]
+
+[workspace.dependencies]
+# crypto::bn254 (CAP-0074, CAP-0080; live on testnet since Protocol 25/26) is
+# not yet in a crates.io release: latest published soroban-sdk is 26.1.0 and it
+# lacks the module (verified by a compile probe on 2026-06-11). Pinned to the
+# rs-soroban-sdk main revision of 2026-06-08 instead.
+# sourceRef: ~/ref/soroban-examples-p25-preview/p25-preview/Cargo.toml (same
+# git-pin pattern, older revision).
+soroban-sdk = { git = "https://github.com/stellar/rs-soroban-sdk", rev = "caddc8c367e8fd66a2a5962bcb0ca4850c23bf4a" }
+
+# Profile copied from the upstream example workspace.
+# sourceRef: ~/ref/soroban-examples-main/groth16_verifier/Cargo.toml
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true

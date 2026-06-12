@@ -1,0 +1,11 @@
+# Build artifacts (zkey and ptau upload policy is revisited day 4 per plan)
+circuits/build/
+contracts/target/
+target/
+node_modules/
+
+# Local environment files: documented in .env.example, never committed
+.env
+
+# Windows-side metadata that WSL file copies pick up
+*Zone.Identifier
