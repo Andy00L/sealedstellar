@@ -16,6 +16,8 @@
 // Usage:
 //   node format-args.js --vkey <vkey.json> --proof <proof.json> \
 //     --public <public.json> --out <args.json>
+// Vkey-only mode (deploy-time, before any proof exists):
+//   node format-args.js --vkey <vkey.json> --out <args.json>
 
 'use strict';
 
@@ -220,10 +222,15 @@ function parseCliArguments(argv) {
     }
     options[flagName.slice(2)] = flagValue;
   }
-  for (const requiredName of ['vkey', 'proof', 'public', 'out']) {
+  for (const requiredName of ['vkey', 'out']) {
     if (!options[requiredName]) {
       return { ok: false, reason: `missing required flag --${requiredName}` };
     }
+  }
+  // proof and public travel together: either both (full mode) or neither
+  // (vkey-only mode used at deploy time).
+  if (Boolean(options.proof) !== Boolean(options.public)) {
+    return { ok: false, reason: 'flags --proof and --public must be supplied together' };
   }
   return { ok: true, value: options };
 }
@@ -243,50 +250,53 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  const proofFile = readJsonFile(options.proof, 'proof');
-  if (!proofFile.ok) {
-    console.error(`[main] ${proofFile.reason}`);
-    process.exitCode = 1;
-    return;
-  }
-  const publicFile = readJsonFile(options.public, 'public');
-  if (!publicFile.ok) {
-    console.error(`[main] ${publicFile.reason}`);
-    process.exitCode = 1;
-    return;
-  }
-
   const verificationKeyResult = buildVerificationKeyArg(vkeyFile.value);
   if (!verificationKeyResult.ok) {
     console.error(`[main] ${verificationKeyResult.reason}`);
     process.exitCode = 1;
     return;
   }
-  const proofResult = buildProofArg(proofFile.value);
-  if (!proofResult.ok) {
-    console.error(`[main] ${proofResult.reason}`);
-    process.exitCode = 1;
-    return;
-  }
-  const pubSignalsResult = buildPubSignalsArg(publicFile.value);
-  if (!pubSignalsResult.ok) {
-    console.error(`[main] ${pubSignalsResult.reason}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (pubSignalsResult.value.length + 1 !== verificationKeyResult.value.ic.length) {
-    console.error(
-      `[main] public signal count ${pubSignalsResult.value.length} does not match vkey IC length ${verificationKeyResult.value.ic.length} (expected IC length = signals + 1)`,
-    );
-    process.exitCode = 1;
-    return;
-  }
 
   const outputDocument = {
     verification_key: verificationKeyResult.value,
-    proof: proofResult.value,
-    pub_signals: pubSignalsResult.value,
   };
+
+  if (options.proof) {
+    const proofFile = readJsonFile(options.proof, 'proof');
+    if (!proofFile.ok) {
+      console.error(`[main] ${proofFile.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    const publicFile = readJsonFile(options.public, 'public');
+    if (!publicFile.ok) {
+      console.error(`[main] ${publicFile.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    const proofResult = buildProofArg(proofFile.value);
+    if (!proofResult.ok) {
+      console.error(`[main] ${proofResult.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    const pubSignalsResult = buildPubSignalsArg(publicFile.value);
+    if (!pubSignalsResult.ok) {
+      console.error(`[main] ${pubSignalsResult.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (pubSignalsResult.value.length + 1 !== verificationKeyResult.value.ic.length) {
+      console.error(
+        `[main] public signal count ${pubSignalsResult.value.length} does not match vkey IC length ${verificationKeyResult.value.ic.length} (expected IC length = signals + 1)`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    outputDocument.proof = proofResult.value;
+    outputDocument.pub_signals = pubSignalsResult.value;
+  }
+
   try {
     fs.writeFileSync(options.out, `${JSON.stringify(outputDocument, null, 2)}\n`, 'utf8');
   } catch (writeError) {
@@ -298,8 +308,10 @@ function main() {
   console.log(`[main] wrote ${options.out}`);
   console.log('[main] deploy (constructor) argument:');
   console.log(`  --verification_key '${JSON.stringify(outputDocument.verification_key)}'`);
-  console.log('[main] invoke arguments:');
-  console.log(`  -- verify --proof '${JSON.stringify(outputDocument.proof)}' --pub_signals '${JSON.stringify(outputDocument.pub_signals)}'`);
+  if (outputDocument.proof) {
+    console.log('[main] invoke arguments:');
+    console.log(`  -- verify --proof '${JSON.stringify(outputDocument.proof)}' --pub_signals '${JSON.stringify(outputDocument.pub_signals)}'`);
+  }
 }
 
 main();

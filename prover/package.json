@@ -1,0 +1,10 @@
+{
+  "name": "sealedstellar-prover",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Operator tooling: bid material, event decryption, circuit input building, Soroban argument formatting",
+  "dependencies": {
+    "@stellar/stellar-sdk": "^15.1.0",
+    "tweetnacl": "^1.0.3"
+  }
+}

@@ -304,3 +304,53 @@ Evidence:
     (AuctionNotFound), confirming the error surface on chain.
 - Next: day 7 e2e.sh (fresh deploys, 8 funded identities, decrypt, prove,
   settle, balance assertions, refund path).
+
+## 2026-06-12: day 7 milestone DONE, e2e.sh green twice in a row on testnet
+
+What the script proves end to end, from nothing but a funded friendbot
+faucet: 11 fresh identities, fresh verifier (committed vkey) + tBENJI +
+tUSDC + auction deploys, auction 1 with 8 sealed bids (circomlibjs
+commitment, tweetnacl ciphertext emitted in the BidPlaced event), auction 2
+with 3 bids, operator recovers bids purely from chain events and the
+decryption key, recomputed commitments verified against storage, proof from
+the committed zkey, on-chain settle, exact balance assertions on 8 bidders
+plus seller plus the auction contract in both tokens, then refund_all on
+auction 2 after its real-time grace period.
+
+- Run A: exit 0 in 684 s. verifier CAO3WUSJ3AFJ4RXNQGRZQWJRKW6KK4R5U6HDA7POSWSSI4I5245GEA5B,
+  auction CCHYAIMU2AJCSLAEESIUZM5KO74NZMVS5QCZ5IDH4OXOMXEIVMHEQOJM,
+  tBENJI CCTT5WTMBFFAIGAIWKXQPI3BKJBHI2X2SOYKOM2PI75S5SEBXD64YXC7,
+  tUSDC CCRL4I5LVKT5UNDL5V33WUSZPBSWJ7RNBAWC7W252OQ2HSM26ACXQSDC.
+  create txs ed1535c2ff16d7d698ba36f5ac7bbbf38e74ec57c2a282557e8d3f14d0e7f7c0
+  and e8392cff69ac89afeacbf7bba8e822424ef896200886dbee919a0b8e92b61268,
+  settle tx 15d8379e04d96b144b2d8b5cf19cf6f25aade30732faae58f391ce514eb774da,
+  refund tx 3a68420cdad0c3acfb46cf0eb4050aacd06c98b5046dcf8446651132a6d8b44c.
+- Run B (own fresh deploys): exit 0 in 687 s.
+  verifier CCIKAVZBV6ZH2MKRLY2EYDAVQXCN7YD4UN6GQXIUXDMPKASXSBFYOLRO,
+  auction CA4PHJ2YDTYEULIRMX7JCL3YWJJMCROX4I4K7BLQBE2VLBNJK3FRVIUP,
+  tBENJI CBR4ACJKZL4J6NCKGHFKCFPPM2ZL2ZBNIB7XHBV5M43O5HIK5NNDFDVC,
+  tUSDC CBHFEWJKTGO63AEJFEJOES676XMIUDM32HY5OWXQYTG7GOMIH6JHG6QC.
+  create txs 75a6656bf091035b8e79fd93d0efa0dfff42f61d4e693247476155dd2d724654
+  and 07760ac2ebd94755f3a4c622981eb363bb0f22486559670ca4a842c5e1ff5579,
+  settle tx 28ac5cf606305f297f0aa97a32d7c06e15ef434c103e4f6ec9fafe1c2e6ed9ba,
+  refund tx 15748bebf4384b44081b90404357b7acc6756f849188784fd2ab286d5a6b05bd.
+- Both runs: winner slot 2 at 350000, all 13 balance assertions exact, the
+  auction contract ends holding zero in both tokens.
+- Design notes: classic G accounts need trustlines before holding
+  SAC-wrapped assets, so the script sets change-trust lines for the seller
+  (both assets), every bidder (tUSDC), and the winner (tBENJI) before
+  minting. Friendbot funding is idempotent: the curl call may report
+  already-funded, the Horizon account lookup decides, with 5 retries.
+  Deadlines are real wall-clock testnet time: a 420 s bid window shared by
+  both auctions, auction 2 refundable 60 s after the deadline.
+- Bug fixed during bring-up (first attempt died silently): helper functions
+  logged to stdout while also returning data on stdout, so command
+  substitution swallowed logs and corrupted captured values, and set -e
+  aborted without a message. Rule now encoded in the script: logs go to
+  stderr, function stdout carries data only, every capture is
+  failure-wrapped, and an ERR trap names the failing line.
+- The prover package gained @stellar/stellar-sdk 15.1.0 (event fetch and
+  strkey decoding) and tweetnacl 1.0.3 (box encryption). format-args.js
+  gained a vkey-only mode for deploy time.
+- Salts and decrypted prices exist only in files under the run directory in
+  /tmp (mode 700, key files 0600); no secret value is ever printed.
