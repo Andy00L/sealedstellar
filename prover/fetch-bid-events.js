@@ -52,9 +52,12 @@ function scValToNativeDefensive(rawValue) {
 }
 
 async function fetchAllEvents(server, contractId, startLedger) {
+  // The RPC paginates by ledger range, not by matches: an empty page with a
+  // cursor means "nothing in this chunk, keep scanning". Only a missing
+  // cursor (or the page bound) ends the walk.
   const collected = [];
   let cursor;
-  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+  for (let pageIndex = 0; pageIndex < 30; pageIndex += 1) {
     const request = cursor
       ? { filters: [{ type: 'contract', contractIds: [contractId] }], cursor, limit: 200 }
       : {
@@ -63,9 +66,8 @@ async function fetchAllEvents(server, contractId, startLedger) {
           limit: 200,
         };
     const response = await server.getEvents(request);
-    const pageEvents = response.events || [];
-    collected.push(...pageEvents);
-    if (pageEvents.length < 200 || !response.cursor) {
+    collected.push(...(response.events || []));
+    if (!response.cursor) {
       break;
     }
     cursor = response.cursor;
