@@ -26,6 +26,11 @@ export function truncateHex(hexText: string): string {
   return `${hexText.slice(0, 4)}…${hexText.slice(-4)}`
 }
 
+// Field-element commitments render as c0a4…9e1d: 32-byte hex, truncated.
+export function commitmentToTruncatedHex(commitment: bigint): string {
+  return truncateHex(commitment.toString(16).padStart(64, '0'))
+}
+
 // hh:mm:ss with zero padding; clamps below zero
 // (sourceRef: design-handoff/stellar/project/ss-ui.jsx ssFmtClock).
 export function formatClock(totalSeconds: number): string {
