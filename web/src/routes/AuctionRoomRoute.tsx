@@ -5,10 +5,12 @@
 // sourceRef: design-handoff/stellar/project/ss-screens.jsx RoomScreen and
 // RoomThirdScreen.
 
+import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { AppShell } from '@/components/layout/AppShell'
 import { BidSlotGrid } from '@/components/auction/BidSlotGrid'
+import { PlaceBidDialog } from '@/components/auction/PlaceBidDialog'
 import { RefundedNotice } from '@/components/auction/RefundedNotice'
 import { RoomHeader } from '@/components/auction/RoomHeader'
 import { RoomSkeleton } from '@/components/auction/RoomSkeleton'
@@ -17,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useAuctionRoom } from '@/hooks/useAuctionRoom'
 import { useNowSeconds } from '@/hooks/useNowSeconds'
+import { useWallet } from '@/hooks/useWallet'
 import { deriveAuctionTone, countFilledSlots, type AuctionView } from '@/lib/chain'
 import { isAuctionNotFound } from '@/lib/errors'
 import { MAX_BID_SLOTS } from '@/config'
@@ -65,6 +68,7 @@ function AuctionRoomBody({ auction, nowSeconds }: { auction: AuctionView; nowSec
   const filledSlots = countFilledSlots(auction)
   const slotsAreFull = filledSlots >= MAX_BID_SLOTS
   const biddingIsOpen = tone === 'open' && !slotsAreFull
+  const [bidDialogIsOpen, setBidDialogIsOpen] = useState(false)
 
   return (
     <AppShell>
@@ -81,16 +85,30 @@ function AuctionRoomBody({ auction, nowSeconds }: { auction: AuctionView; nowSec
             <span className="font-mono text-[13.5px] text-muted-foreground tabular-nums">
               {filledSlots} of {MAX_BID_SLOTS} slots filled
             </span>
-            <BidCallToAction biddingIsOpen={biddingIsOpen} slotsAreFull={slotsAreFull} />
+            <BidCallToAction
+              biddingIsOpen={biddingIsOpen}
+              slotsAreFull={slotsAreFull}
+              onOpenDialog={() => setBidDialogIsOpen(true)}
+            />
           </div>
         </div>
 
         {/* Pinned action bar below 640px: the bidder never scrolls to act
             (hi-fi RoomThirdScreen). */}
         <div className="sticky bottom-0 border-t border-border-soft bg-card px-5 py-3.5 sm:hidden">
-          <BidCallToAction biddingIsOpen={biddingIsOpen} slotsAreFull={slotsAreFull} fullWidth />
+          <BidCallToAction
+            biddingIsOpen={biddingIsOpen}
+            slotsAreFull={slotsAreFull}
+            onOpenDialog={() => setBidDialogIsOpen(true)}
+            fullWidth
+          />
         </div>
       </div>
+      <PlaceBidDialog
+        auction={auction}
+        open={bidDialogIsOpen}
+        onClose={() => setBidDialogIsOpen(false)}
+      />
     </AppShell>
   )
 }
@@ -98,21 +116,39 @@ function AuctionRoomBody({ auction, nowSeconds }: { auction: AuctionView; nowSec
 function BidCallToAction({
   biddingIsOpen,
   slotsAreFull,
+  onOpenDialog,
   fullWidth = false,
 }: {
   biddingIsOpen: boolean
   slotsAreFull: boolean
+  onOpenDialog: () => void
   fullWidth?: boolean
 }) {
-  // The bid dialog ships in the next milestone; the CTA is composed per the
-  // hi-fi but stays inert until that wiring lands.
-  const inactiveTitle = !biddingIsOpen
-    ? slotsAreFull
+  const { wallet, connectWallet } = useWallet()
+
+  if (!biddingIsOpen) {
+    const inactiveTitle = slotsAreFull
       ? 'All 8 slots are filled'
       : 'Bidding has closed for this auction'
-    : 'The bid dialog ships in the next milestone'
+    return (
+      <Button className={fullWidth ? 'w-full' : undefined} disabled title={inactiveTitle}>
+        Place sealed bid
+      </Button>
+    )
+  }
+  if (wallet.status !== 'connected') {
+    return (
+      <Button
+        className={fullWidth ? 'w-full' : undefined}
+        disabled={wallet.status === 'connecting'}
+        onClick={() => void connectWallet()}
+      >
+        {wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet to bid'}
+      </Button>
+    )
+  }
   return (
-    <Button className={fullWidth ? 'w-full' : undefined} disabled title={inactiveTitle}>
+    <Button className={fullWidth ? 'w-full' : undefined} onClick={onOpenDialog}>
       Place sealed bid
     </Button>
   )

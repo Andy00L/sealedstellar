@@ -52,6 +52,8 @@ export type AuctionView = {
   bids: BidView[]
   /** False after a refund whose lot-return leg failed (retryable on chain). */
   lotReclaimed: boolean
+  /** tweetnacl box public key bids are encrypted to (plan section 2.2). */
+  operatorEncPubkey: Uint8Array
   lotSymbol: string
   paymentSymbol: string
 }
@@ -130,6 +132,7 @@ type RawAuctionRecord = {
   status: unknown
   bids: { bidder: string; commitment: bigint }[]
   lot_reclaimed: boolean
+  operator_enc_pubkey: Uint8Array
 }
 
 function isRawAuctionRecord(candidate: unknown): candidate is RawAuctionRecord {
@@ -209,6 +212,9 @@ export async function getAuction(auctionId: number): Promise<Result<AuctionView,
         commitment: rawBid.commitment,
       })),
       lotReclaimed: rawRecord.lot_reclaimed,
+      // scValToNative yields a Buffer view; copy into a plain Uint8Array so
+      // browser crypto consumers stay free of node typings.
+      operatorEncPubkey: Uint8Array.from(rawRecord.operator_enc_pubkey),
       lotSymbol: lotSymbolResult.value,
       paymentSymbol: paymentSymbolResult.value,
     },
@@ -296,18 +302,35 @@ export async function getSettlementInfo(
     nativeToScVal(BigInt(auctionId), { type: 'u64' }).toXDR('base64'),
   ]
   try {
-    const eventsResponse = await rpcServer.getEvents({
-      startLedger: Math.max(1, latestLedgerSequence - EVENT_LOOKBACK_LEDGERS),
-      filters: [
-        {
-          type: 'contract',
-          contractIds: [AUCTION_CONTRACT_ID],
-          topics: [topicFilter],
-        },
-      ],
-      limit: 10,
-    })
-    const matchedEvents = (eventsResponse.events ?? []) as RawEventRecord[]
+    // The RPC paginates by ledger range, not by matches: empty pages with a
+    // cursor mean "keep scanning". Walk until the cursor ends or the page
+    // bound trips (30 pages comfortably covers the retention window).
+    const matchedEvents: RawEventRecord[] = []
+    let pageCursor: string | undefined
+    for (let pageIndex = 0; pageIndex < 30; pageIndex += 1) {
+      const eventsResponse = await rpcServer.getEvents(
+        pageCursor
+          ? {
+              filters: [
+                { type: 'contract', contractIds: [AUCTION_CONTRACT_ID], topics: [topicFilter] },
+              ],
+              cursor: pageCursor,
+              limit: 200,
+            }
+          : {
+              startLedger: Math.max(1, latestLedgerSequence - EVENT_LOOKBACK_LEDGERS),
+              filters: [
+                { type: 'contract', contractIds: [AUCTION_CONTRACT_ID], topics: [topicFilter] },
+              ],
+              limit: 200,
+            },
+      )
+      matchedEvents.push(...((eventsResponse.events ?? []) as RawEventRecord[]))
+      if (!eventsResponse.cursor) {
+        break
+      }
+      pageCursor = eventsResponse.cursor
+    }
     for (const eventRecord of matchedEvents) {
       const eventData = decodeEventScVal(eventRecord.value)
       if (
