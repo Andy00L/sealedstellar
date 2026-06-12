@@ -1,11 +1,17 @@
-// "Earlier" list row: lot, deposit caption, slot count, lifecycle pill.
-// sourceRef: design-handoff/stellar/project/ss-screens.jsx AuctionHistoryRow.
+// "Earlier" list row: lot, deposit caption, slot count, lifecycle marker.
+// Settled rows upgrade to the true clearing price (read from the
+// AuctionSettled event) plus the small verified stamp; if the event has
+// left the retention window the row falls back to the plain pill.
+// sourceRef: design-handoff/stellar/project/ss-screens.jsx AuctionHistoryRow
+// and ss-ui.jsx SSStamp (sm).
 
 import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Card } from '@/components/ui/card'
 import { StatusPill } from '@/components/auction/StatusPill'
+import { VerifiedStamp } from '@/components/auction/VerifiedStamp'
+import { useSettlementInfo } from '@/hooks/useSettlementInfo'
 import { countFilledSlots, type AuctionTone, type AuctionView } from '@/lib/chain'
 import { formatTokenAmount } from '@/lib/format'
 import { MAX_BID_SLOTS } from '@/config'
@@ -16,6 +22,10 @@ type AuctionHistoryRowProps = {
 }
 
 export function AuctionHistoryRow({ auction, tone }: AuctionHistoryRowProps) {
+  const settlementState = useSettlementInfo(auction.id, tone === 'settled')
+  const settlementInfo =
+    settlementState.phase === 'ready' ? settlementState.info : null
+
   return (
     <Card className="rounded-lg border-border-soft p-0 shadow-none">
       <Link
@@ -31,10 +41,22 @@ export function AuctionHistoryRow({ auction, tone }: AuctionHistoryRowProps) {
             {auction.paymentSymbol} · {formatTokenAmount(auction.maxPrice)} deposit
           </span>
         </span>
+        {tone === 'settled' && settlementInfo && (
+          <span className="hidden text-right sm:grid">
+            <span className="font-mono text-[13.5px] font-semibold tabular-nums">
+              {formatTokenAmount(settlementInfo.winningPrice)} {auction.paymentSymbol}
+            </span>
+            <span className="text-[11px] text-muted-foreground">cleared at second price</span>
+          </span>
+        )}
         <span className="font-mono w-[50px] text-[13px] text-muted-foreground tabular-nums">
           {countFilledSlots(auction)} of {MAX_BID_SLOTS}
         </span>
-        <StatusPill status={tone} />
+        {tone === 'settled' && settlementInfo ? (
+          <VerifiedStamp small />
+        ) : (
+          <StatusPill status={tone} />
+        )}
         <ChevronRight size={16} className="text-ink-faint" aria-hidden="true" />
       </Link>
     </Card>

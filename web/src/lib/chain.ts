@@ -2,7 +2,15 @@
 // All functions return Result values; nothing here throws on chain or
 // network failures.
 
-import { Account, Contract, TransactionBuilder, nativeToScVal, scValToNative, rpc } from '@stellar/stellar-sdk'
+import {
+  Account,
+  Contract,
+  TransactionBuilder,
+  nativeToScVal,
+  scValToNative,
+  rpc,
+  xdr,
+} from '@stellar/stellar-sdk'
 
 import {
   AUCTION_CONTRACT_ID,
@@ -42,6 +50,8 @@ export type AuctionView = {
   gracePeriodSeconds: number
   status: AuctionStatusName
   bids: BidView[]
+  /** False after a refund whose lot-return leg failed (retryable on chain). */
+  lotReclaimed: boolean
   lotSymbol: string
   paymentSymbol: string
 }
@@ -119,6 +129,7 @@ type RawAuctionRecord = {
   grace_period: bigint
   status: unknown
   bids: { bidder: string; commitment: bigint }[]
+  lot_reclaimed: boolean
 }
 
 function isRawAuctionRecord(candidate: unknown): candidate is RawAuctionRecord {
@@ -197,6 +208,7 @@ export async function getAuction(auctionId: number): Promise<Result<AuctionView,
         bidder: rawBid.bidder,
         commitment: rawBid.commitment,
       })),
+      lotReclaimed: rawRecord.lot_reclaimed,
       lotSymbol: lotSymbolResult.value,
       paymentSymbol: paymentSymbolResult.value,
     },
@@ -225,4 +237,99 @@ export async function listAuctions(): Promise<Result<AuctionView[], ChainError>>
 
 export function countFilledSlots(view: AuctionView): number {
   return Math.min(view.bids.length, MAX_BID_SLOTS)
+}
+
+// ---------------------------------------------------------------------------
+// Settlement info: the contract does not store the clearing price; it lives
+// in the AuctionSettled event (sourceRef: contracts/auction/src/lib.rs).
+// Testnet retains events for roughly seven days, so rows older than the
+// retention window gracefully fall back to the plain settled treatment.
+// ---------------------------------------------------------------------------
+
+export type SettlementInfo = {
+  winner: string
+  winningPrice: bigint
+  txHash?: string
+}
+
+// Fixed topic for the #[contractevent] AuctionSettled struct (snake case of
+// the struct name), with the auction id as the second topic.
+const AUCTION_SETTLED_TOPIC = 'auction_settled'
+// Lookback inside the testnet event retention window (~17280 ledgers/day).
+const EVENT_LOOKBACK_LEDGERS = 100_000
+
+// Settlement is immutable: cache hits and misses alike per auction id.
+const settlementCache = new Map<number, SettlementInfo | null>()
+
+type RawEventRecord = {
+  topic: unknown[]
+  value: unknown
+  txHash?: string
+}
+
+function decodeEventScVal(rawValue: unknown): unknown {
+  if (typeof rawValue === 'string') {
+    return scValToNative(xdr.ScVal.fromXDR(rawValue, 'base64'))
+  }
+  return scValToNative(rawValue as xdr.ScVal)
+}
+
+export async function getSettlementInfo(
+  auctionId: number,
+): Promise<Result<SettlementInfo | null, ChainError>> {
+  const cachedInfo = settlementCache.get(auctionId)
+  if (cachedInfo !== undefined) {
+    return { ok: true, value: cachedInfo }
+  }
+
+  let latestLedgerSequence: number
+  try {
+    const latestLedger = await rpcServer.getLatestLedger()
+    latestLedgerSequence = latestLedger.sequence
+  } catch (networkError) {
+    const detail = networkError instanceof Error ? networkError.message : String(networkError)
+    return { ok: false, error: { kind: 'rpc_unreachable', detail } }
+  }
+
+  const topicFilter = [
+    nativeToScVal(AUCTION_SETTLED_TOPIC, { type: 'symbol' }).toXDR('base64'),
+    nativeToScVal(BigInt(auctionId), { type: 'u64' }).toXDR('base64'),
+  ]
+  try {
+    const eventsResponse = await rpcServer.getEvents({
+      startLedger: Math.max(1, latestLedgerSequence - EVENT_LOOKBACK_LEDGERS),
+      filters: [
+        {
+          type: 'contract',
+          contractIds: [AUCTION_CONTRACT_ID],
+          topics: [topicFilter],
+        },
+      ],
+      limit: 10,
+    })
+    const matchedEvents = (eventsResponse.events ?? []) as RawEventRecord[]
+    for (const eventRecord of matchedEvents) {
+      const eventData = decodeEventScVal(eventRecord.value)
+      if (
+        typeof eventData === 'object' &&
+        eventData !== null &&
+        'winner' in eventData &&
+        'winning_price' in eventData
+      ) {
+        const dataRecord = eventData as { winner: string; winning_price: bigint }
+        const settlementInfo: SettlementInfo = {
+          winner: dataRecord.winner,
+          winningPrice: dataRecord.winning_price,
+          txHash: eventRecord.txHash,
+        }
+        settlementCache.set(auctionId, settlementInfo)
+        return { ok: true, value: settlementInfo }
+      }
+    }
+    settlementCache.set(auctionId, null)
+    return { ok: true, value: null }
+  } catch (networkError) {
+    const detail = networkError instanceof Error ? networkError.message : String(networkError)
+    return { ok: false, error: { kind: 'rpc_unreachable', detail } }
+  }
 }
