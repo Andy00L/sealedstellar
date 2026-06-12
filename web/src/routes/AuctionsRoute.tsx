@@ -1,0 +1,77 @@
+// Auctions list: the home screen. Open auctions get the spotlight treatment
+// under "Live now"; everything else lands under "Earlier".
+// sourceRef: design-handoff/stellar/project/ss-screens.jsx ListScreen.
+
+import { AppShell } from '@/components/layout/AppShell'
+import { AuctionHistoryRow } from '@/components/auction/AuctionHistoryRow'
+import { AuctionSpotlightCard } from '@/components/auction/AuctionSpotlightCard'
+import { AuctionsEmptyState } from '@/components/auction/AuctionsEmptyState'
+import { AuctionsSkeleton } from '@/components/auction/AuctionsSkeleton'
+import { RpcDownNotice } from '@/components/auction/RpcDownNotice'
+import { useAuctionsList } from '@/hooks/useAuctionsList'
+import { useNowSeconds } from '@/hooks/useNowSeconds'
+import { deriveAuctionTone, type AuctionView } from '@/lib/chain'
+
+export function AuctionsRoute() {
+  const { listState, refreshNow } = useAuctionsList()
+  const nowSeconds = useNowSeconds()
+
+  return (
+    <AppShell>
+      <div className="mx-auto grid max-w-xl gap-3.5 px-5 py-6 sm:px-7">
+        {listState.phase === 'loading' && <AuctionsSkeleton />}
+
+        {listState.phase === 'error' && (
+          <RpcDownNotice retryInSeconds={listState.retryInSeconds} onRetryNow={refreshNow} />
+        )}
+
+        {listState.phase === 'ready' && listState.auctions.length === 0 && (
+          <AuctionsEmptyState onRefresh={refreshNow} />
+        )}
+
+        {listState.phase === 'ready' && listState.auctions.length > 0 && (
+          <ListBody nowSeconds={nowSeconds} auctions={listState.auctions} />
+        )}
+      </div>
+    </AppShell>
+  )
+}
+
+type ListBodyProps = {
+  nowSeconds: number
+  auctions: AuctionView[]
+}
+
+function ListBody({ nowSeconds, auctions }: ListBodyProps) {
+  const openAuctions = auctions.filter(
+    (auction) => deriveAuctionTone(auction, nowSeconds) === 'open',
+  )
+  const earlierAuctions = auctions
+    .filter((auction) => deriveAuctionTone(auction, nowSeconds) !== 'open')
+    .reverse()
+
+  return (
+    <>
+      {openAuctions.length > 0 && (
+        <>
+          <span className="text-[19px] font-semibold tracking-[-0.01em]">Live now</span>
+          {openAuctions.map((auction) => (
+            <AuctionSpotlightCard key={auction.id} auction={auction} nowSeconds={nowSeconds} />
+          ))}
+        </>
+      )}
+      {earlierAuctions.length > 0 && (
+        <>
+          <span className="mt-2 text-[13px] font-semibold text-muted-foreground">Earlier</span>
+          {earlierAuctions.map((auction) => (
+            <AuctionHistoryRow
+              key={auction.id}
+              auction={auction}
+              tone={deriveAuctionTone(auction, nowSeconds)}
+            />
+          ))}
+        </>
+      )}
+    </>
+  )
+}
