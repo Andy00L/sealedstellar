@@ -12,12 +12,8 @@ import {
   xdr,
 } from '@stellar/stellar-sdk'
 
-import {
-  AUCTION_CONTRACT_ID,
-  MAX_BID_SLOTS,
-  NETWORK_PASSPHRASE,
-  RPC_URL,
-} from '../config'
+import { AUCTION_CONTRACT_ID, MAX_BID_SLOTS, NETWORK_PASSPHRASE } from '../config'
+import { rpcServer } from './rpc'
 import { parseContractErrorCode, type ChainError, type Result } from './errors'
 
 // Read simulations still need a structurally valid source account; this is
@@ -29,8 +25,6 @@ const SIMULATION_FEE_STROOPS = '100'
 // Sequential probe bound for the dense auction id space; the standing demo
 // instance holds far fewer than this.
 const MAX_AUCTION_PROBES = 50
-
-const rpcServer = new rpc.Server(RPC_URL)
 
 export type AuctionStatusName = 'Open' | 'Settled' | 'Refunded'
 
@@ -95,6 +89,8 @@ async function simulateContractView(
     return { ok: false, error: { kind: 'rpc_unreachable', detail } }
   }
 
+  // A contract trap (for example AuctionNotFound) lands here so the list can
+  // stop probing the id space.
   if (rpc.Api.isSimulationError(simulation)) {
     const contractErrorCode = parseContractErrorCode(simulation.error)
     if (contractErrorCode !== undefined) {
@@ -304,7 +300,9 @@ export async function getSettlementInfo(
   try {
     // The RPC paginates by ledger range, not by matches: empty pages with a
     // cursor mean "keep scanning". Walk until the cursor ends or the page
-    // bound trips (30 pages comfortably covers the retention window).
+    // bound trips (30 pages comfortably covers the retention window). An event
+    // older than the ~7-day testnet retention is simply gone, and the row
+    // falls back to the plain settled treatment.
     const matchedEvents: RawEventRecord[] = []
     let pageCursor: string | undefined
     for (let pageIndex = 0; pageIndex < 30; pageIndex += 1) {

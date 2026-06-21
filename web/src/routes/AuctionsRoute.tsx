@@ -1,25 +1,37 @@
-// Auctions list: the home screen. Open auctions get the spotlight treatment
-// under "Live now"; everything else lands under "Earlier".
-// sourceRef: design-handoff/stellar/project/ss-screens.jsx ListScreen.
+// Auctions list: the home screen. One uniform grid of glass cards over the
+// ambient field, ordered live-first so an open auction is always on top.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
+// SealedStellar.dc.html list screen.
 
 import { AppShell } from '@/components/layout/AppShell'
-import { AuctionHistoryRow } from '@/components/auction/AuctionHistoryRow'
-import { AuctionSpotlightCard } from '@/components/auction/AuctionSpotlightCard'
-import { ListHero } from '@/components/auction/ListHero'
+import { AuctionCard } from '@/components/auction/AuctionCard'
 import { AuctionsEmptyState } from '@/components/auction/AuctionsEmptyState'
 import { AuctionsSkeleton } from '@/components/auction/AuctionsSkeleton'
 import { RpcDownNotice } from '@/components/auction/RpcDownNotice'
 import { useAuctionsList } from '@/hooks/useAuctionsList'
 import { useNowSeconds } from '@/hooks/useNowSeconds'
-import { deriveAuctionTone, type AuctionView } from '@/lib/chain'
+import { deriveAuctionTone, type AuctionTone, type AuctionView } from '@/lib/chain'
+
+// Live auctions first, then awaiting, settled, refunded; newest id first
+// within each tone so the latest staged auction surfaces at the top.
+const TONE_ORDER: Record<AuctionTone, number> = { open: 0, awaiting: 1, settled: 2, refunded: 3 }
+
+function orderForDisplay(auctions: AuctionView[], nowSeconds: number): AuctionView[] {
+  return [...auctions].sort((firstAuction, secondAuction) => {
+    const toneDelta =
+      TONE_ORDER[deriveAuctionTone(firstAuction, nowSeconds)] -
+      TONE_ORDER[deriveAuctionTone(secondAuction, nowSeconds)]
+    return toneDelta !== 0 ? toneDelta : secondAuction.id - firstAuction.id
+  })
+}
 
 export function AuctionsRoute() {
   const { listState, refreshNow } = useAuctionsList()
   const nowSeconds = useNowSeconds()
 
   return (
-    <AppShell>
-      <div className="mx-auto grid w-full max-w-xl gap-3.5 px-5 py-6 sm:px-7 lg:max-w-[920px]">
+    <AppShell crumb="Testnet" title="Sealed auctions">
+      <div className="mx-auto w-full max-w-[1180px] px-5 pb-12 pt-2 sm:px-8">
         {listState.phase === 'loading' && <AuctionsSkeleton />}
 
         {listState.phase === 'error' && (
@@ -31,51 +43,13 @@ export function AuctionsRoute() {
         )}
 
         {listState.phase === 'ready' && listState.value.length > 0 && (
-          <ListBody nowSeconds={nowSeconds} auctions={listState.value} />
+          <div className="grid gap-5 sm:grid-cols-[repeat(auto-fill,minmax(330px,1fr))]">
+            {orderForDisplay(listState.value, nowSeconds).map((auction) => (
+              <AuctionCard key={auction.id} auction={auction} nowSeconds={nowSeconds} />
+            ))}
+          </div>
         )}
       </div>
     </AppShell>
-  )
-}
-
-type ListBodyProps = {
-  nowSeconds: number
-  auctions: AuctionView[]
-}
-
-function ListBody({ nowSeconds, auctions }: ListBodyProps) {
-  const openAuctions = auctions.filter(
-    (auction) => deriveAuctionTone(auction, nowSeconds) === 'open',
-  )
-  const earlierAuctions = auctions
-    .filter((auction) => deriveAuctionTone(auction, nowSeconds) !== 'open')
-    .reverse()
-
-  return (
-    <>
-      <ListHero auctions={auctions} nowSeconds={nowSeconds} />
-      {openAuctions.length > 0 && (
-        <>
-          <span className="text-[19px] font-semibold tracking-[-0.01em]">Live now</span>
-          <div className="grid gap-3.5 lg:grid-cols-2">
-            {openAuctions.map((auction) => (
-              <AuctionSpotlightCard key={auction.id} auction={auction} nowSeconds={nowSeconds} />
-            ))}
-          </div>
-        </>
-      )}
-      {earlierAuctions.length > 0 && (
-        <>
-          <span className="mt-2 text-[13px] font-semibold text-muted-foreground">Earlier</span>
-          {earlierAuctions.map((auction) => (
-            <AuctionHistoryRow
-              key={auction.id}
-              auction={auction}
-              tone={deriveAuctionTone(auction, nowSeconds)}
-            />
-          ))}
-        </>
-      )}
-    </>
   )
 }

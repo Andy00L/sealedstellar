@@ -1,55 +1,54 @@
-// The sealed bid card: paper-grain surface, wax seal, bidder address above,
-// commitment hash below. Lifecycle: sealed (default), sealedForever (dimmed
-// after settlement for losing bids), landing (entry animation when a bid
-// arrives on a poll tick). Custom domain component: the wax motif has no
-// primitive equivalent.
-// sourceRef: design-handoff/stellar/project/ss-theme.css .ss-bidcard and
-// ss-ui.jsx SSBidCard.
+// A sealed bid slot: a frosted glass square with paper grain, the bidder
+// address and truncated commitment, the seal medallion, and a redaction bar
+// standing in for the hidden amount (no real value is ever shown). After
+// settlement, losing slots dim to "sealed forever". Landing plays once when a
+// bid first arrives on a poll tick.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
+// SealedStellar.dc.html sealed slot.
 
-import { WaxSeal } from '@/components/auction/WaxSeal'
+import { SealMedallion } from '@/components/auction/SealMedallion'
 import { cn } from '@/lib/utils'
-import { commitmentToTruncatedHex } from '@/lib/format'
-import { truncateAddress } from '@/lib/format'
+import { commitmentToTruncatedHex, truncateAddress } from '@/lib/format'
 import type { BidView } from '@/lib/chain'
 
 type SealedBidCardProps = {
   bid: BidView
-  sealSize?: number
   dimmed?: boolean
   landing?: boolean
-  className?: string
 }
 
-export function SealedBidCard({
-  bid,
-  sealSize = 48,
-  dimmed = false,
-  landing = false,
-  className,
-}: SealedBidCardProps) {
+export function SealedBidCard({ bid, dimmed = false, landing = false }: SealedBidCardProps) {
   return (
     <div
       className={cn(
-        'paper-grain flex flex-col items-center justify-between overflow-hidden',
-        'rounded-lg border border-border-soft bg-card px-3 pt-3.25 pb-3 shadow-card',
+        'paper-grain glass-panel relative aspect-square overflow-hidden rounded-2xl p-4',
         'transition-[opacity,filter] duration-(--motion-dim) ease-out',
-        dimmed && 'opacity-[0.42] grayscale-[0.55]',
+        dimmed && 'opacity-[0.38] saturate-[0.7]',
         landing && 'animate-land',
-        className,
       )}
     >
-      <span className="font-mono text-[11px] text-ink-faint tabular-nums">
-        {truncateAddress(bid.bidder)}
-      </span>
-      <span className="grid place-items-center gap-2">
-        <WaxSeal size={sealSize} />
-        <span className="text-[10px] lowercase tracking-[0.24em] text-ink-faint">
-          {dimmed ? 'sealed forever' : 'sealed'}
-        </span>
-      </span>
-      <span className="font-mono text-xs tabular-nums">
-        {commitmentToTruncatedHex(bid.commitment)}
-      </span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="font-mono text-[11px] text-muted-foreground">
+            {truncateAddress(bid.bidder)}
+          </div>
+          <div className="mt-1 font-mono text-[10px] text-ink-faint">
+            commit {commitmentToTruncatedHex(bid.commitment)}
+          </div>
+        </div>
+        <SealMedallion size={34} />
+      </div>
+      <div className="absolute inset-x-4 bottom-4">
+        <div className="mb-1.5 text-[9px] uppercase tracking-[0.14em] text-ink-faint">
+          {dimmed ? 'Sealed forever' : 'Sealed amount'}
+        </div>
+        {/* Redaction bar: the hidden bid amount is never rendered, only obscured. */}
+        <div className="flex h-6 items-center rounded-md bg-foreground/5 px-2.5">
+          <span className="select-none font-mono text-[13px] tracking-[2px] text-foreground/40 blur-[3px]">
+            ••••••••
+          </span>
+        </div>
+      </div>
     </div>
   )
 }

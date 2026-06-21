@@ -7,7 +7,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusPill } from '@/components/auction/StatusPill'
 import { VerifiedStamp } from '@/components/auction/VerifiedStamp'
-import { WaxSeal } from '@/components/auction/WaxSeal'
+import { SealMedallion } from '@/components/auction/SealMedallion'
 
 type SwatchProps = {
   colorValue: string
@@ -38,7 +38,7 @@ export function SpecimenRoute() {
         </div>
 
         <div className="flex flex-wrap gap-4.5">
-          <Swatch colorValue="var(--background)" name="Background" note="#FAF9F6 cream" bordered />
+          <Swatch colorValue="var(--background)" name="Background" note="#F3F1EC paper" bordered />
           <Swatch colorValue="var(--card)" name="Surface" note="#FFFFFF" bordered />
           <Swatch colorValue="var(--foreground)" name="Ink" note="#1D1D1F" />
           <Swatch colorValue="var(--muted-foreground)" name="Secondary" note="#6E6E73" />
@@ -53,8 +53,7 @@ export function SpecimenRoute() {
           </div>
           <div className="text-2xl font-semibold tracking-[-0.015em]">50,000 tBENJI</div>
           <div className="text-[15px]">
-            Body text is the system stack at 15 to 16px, weight 600 maximum, sentence case
-            everywhere.
+            Body text is Geist at 15 to 16px, weight 600 maximum, sentence case everywhere.
           </div>
           <div className="text-[13px] text-muted-foreground">
             Captions and metadata sit at 12 to 13.5px in secondary ink.
@@ -75,10 +74,18 @@ export function SpecimenRoute() {
         </div>
 
         <div className="flex flex-wrap items-center gap-6 border-t border-border-soft pt-5">
-          <WaxSeal size={54} />
-          <WaxSeal size={38} />
-          <WaxSeal size={28} />
+          <SealMedallion size={54} />
+          <SealMedallion size={38} />
+          <SealMedallion size={28} />
           <VerifiedStamp />
+        </div>
+
+        <div className="glass-panel grid gap-2 rounded-[18px] p-5">
+          <span className="text-[13px] font-semibold">Glass surface (.glass-panel)</span>
+          <span className="text-[12.5px] text-muted-foreground">
+            Translucent fill, soft blur, one bright top edge: the redesign material over the ambient
+            paper field.
+          </span>
         </div>
 
         <div className="grid max-w-sm gap-3 border-t border-border-soft pt-5">

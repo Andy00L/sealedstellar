@@ -1,7 +1,7 @@
-// Wallet slot in the app bar: ghost connect button, connected mono pill, or
-// the Freighter-missing notice.
-// sourceRef: design-handoff/stellar/project/ss-ui.jsx SSAppBar and
-// ss-unseal.jsx EdgeWallet.
+// Wallet slot in the top bar: glass connect CTA, a connected glass chip with
+// a glowing dot and the mono address, or the Freighter-missing notice.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
+// SealedStellar.dc.html wallet pill + connect button.
 
 import { ExternalLink } from 'lucide-react'
 
@@ -20,9 +20,10 @@ export function WalletButton() {
         type="button"
         onClick={() => void disconnectWallet()}
         title="Disconnect wallet"
-        className="font-mono cursor-pointer rounded-full border border-border bg-card px-3.5 py-1.25 text-xs hover:border-foreground/22"
+        className="glass-panel flex cursor-pointer items-center gap-2.5 rounded-xl px-3.5 py-2.25"
       >
-        {truncateAddress(wallet.address)}
+        <span className="size-[7px] rounded-full bg-primary shadow-[0_0_8px_rgba(43,95,217,.7)]" />
+        <span className="font-mono text-[13px]">{truncateAddress(wallet.address)}</span>
       </button>
     )
   }
@@ -30,8 +31,10 @@ export function WalletButton() {
   if (wallet.status === 'missing') {
     return (
       <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
-        <span>You need the Freighter extension to bid. Watching is fine without it.</span>
-        <Button variant="outline" size="sm" asChild>
+        <span className="hidden sm:inline">
+          You need the Freighter extension to bid. Watching is fine without it.
+        </span>
+        <Button variant="glass" size="sm" asChild>
           <a href={FREIGHTER_INSTALL_URL} target="_blank" rel="noreferrer">
             Get Freighter
             <ExternalLink aria-hidden="true" />
@@ -46,12 +49,12 @@ export function WalletButton() {
 
   return (
     <Button
-      variant="outline"
-      size="sm"
+      variant="cta"
+      className="rounded-xl"
       disabled={wallet.status === 'connecting'}
       onClick={() => void connectWallet()}
     >
-      {wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet'}
+      {wallet.status === 'connecting' ? 'Connecting…' : 'Connect Freighter'}
     </Button>
   )
 }

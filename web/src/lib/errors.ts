@@ -125,3 +125,77 @@ export function classifyPlaceBidChainError(error: ChainError): BidFailure {
     error.kind === 'contract_error' ? `contract error ${error.code}` : error.detail
   return { kind: 'submission_failed', detail }
 }
+
+// ---------------------------------------------------------------------------
+// Settle failure vocabulary: the operator flow, like bidding, gets one
+// actionable sentence per failure mode, decoded from the settle error
+// variants, never a code.
+// sourceRef: contracts/auction/src/lib.rs settle() error returns.
+// ---------------------------------------------------------------------------
+
+export type SettleFailure =
+  | { kind: 'wallet_declined' }
+  | { kind: 'deadline_not_reached' }
+  | { kind: 'already_finalized' }
+  | { kind: 'winner_index_invalid' }
+  | { kind: 'price_not_positive' }
+  | { kind: 'price_exceeds_max' }
+  | { kind: 'winner_mismatch' }
+  | { kind: 'proof_invalid' }
+  | { kind: 'verifier_failed' }
+  | { kind: 'rpc_unreachable' }
+  | { kind: 'submission_failed'; detail: string }
+
+export function describeSettleFailure(failure: SettleFailure): string {
+  switch (failure.kind) {
+    case 'wallet_declined':
+      return 'You declined the signature in your wallet. The auction was not settled.'
+    case 'deadline_not_reached':
+      return 'Bidding has not closed yet. Settlement opens after the deadline.'
+    case 'already_finalized':
+      return 'This auction is already settled or refunded.'
+    case 'winner_index_invalid':
+      return 'The winner slot in the proof bundle is out of range for this auction.'
+    case 'price_not_positive':
+      return 'The clearing price must be above zero. An auction with fewer than two bids has no second price and can only be refunded.'
+    case 'price_exceeds_max':
+      return 'The clearing price exceeds the auction max price; this bundle does not match this auction.'
+    case 'winner_mismatch':
+      return 'The winner address does not match the bid in that slot. Re-check the proof bundle.'
+    case 'proof_invalid':
+      return 'The proof did not verify on chain for this auction. Re-generate it against this exact auction.'
+    case 'verifier_failed':
+      return 'The on-chain verifier rejected the proof bytes. Re-export the bundle from the CLI.'
+    case 'rpc_unreachable':
+      return 'Testnet RPC is not answering. Settlement is safe to retry.'
+    case 'submission_failed':
+      return `The network rejected the settlement: ${failure.detail}`
+  }
+}
+
+// Maps a settle contract error code to its failure mode, or null when the
+// code is not one settle can return (the caller falls back to a generic
+// submission failure).
+export function classifySettleContractError(code: number): SettleFailure | null {
+  switch (code) {
+    case AUCTION_ERROR_CODES.SettleBeforeDeadline:
+      return { kind: 'deadline_not_reached' }
+    case AUCTION_ERROR_CODES.AlreadySettled:
+    case AUCTION_ERROR_CODES.AlreadyRefunded:
+      return { kind: 'already_finalized' }
+    case AUCTION_ERROR_CODES.WinnerIndexOutOfRange:
+      return { kind: 'winner_index_invalid' }
+    case AUCTION_ERROR_CODES.WinningPriceNotPositive:
+      return { kind: 'price_not_positive' }
+    case AUCTION_ERROR_CODES.WinningPriceExceedsMax:
+      return { kind: 'price_exceeds_max' }
+    case AUCTION_ERROR_CODES.WinnerAddressMismatch:
+      return { kind: 'winner_mismatch' }
+    case AUCTION_ERROR_CODES.ProofInvalid:
+      return { kind: 'proof_invalid' }
+    case AUCTION_ERROR_CODES.VerifierCallFailed:
+      return { kind: 'verifier_failed' }
+    default:
+      return null
+  }
+}

@@ -1,21 +1,31 @@
-// The 8-slot grid. Bids landing on a poll tick play the land animation:
-// the previously seen count is kept in state and adjusted during render
-// (the React-sanctioned derived-state pattern), so slots at or beyond the
-// old count animate exactly once when they first appear.
-// sourceRef: design-handoff/stellar/project/ss-screens.jsx SealedBidGrid.
+// The 8-slot grid. Empty slots are dashed; filled slots are sealed cards; the
+// winning slot (once known) is the flip card. After the winner is revealed
+// (unseal stage >= 2) the losing slots dim to "sealed forever". Bids landing
+// on a poll tick play the land animation once: the previously seen count is
+// kept in state and adjusted during render (the React-sanctioned
+// derived-state pattern).
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
+// SealedStellar.dc.html slot grid.
 
 import { useState } from 'react'
 
 import { EmptySlot } from '@/components/auction/EmptySlot'
 import { SealedBidCard } from '@/components/auction/SealedBidCard'
+import { WinnerFlipCard } from '@/components/auction/WinnerFlipCard'
 import { MAX_BID_SLOTS } from '@/config'
 import type { BidView } from '@/lib/chain'
 
 type BidSlotGridProps = {
   bids: BidView[]
-  /** Dim every filled card to "sealed forever" (post-settlement losers). */
+  /** Index of the winning slot once settled; renders the flip card there. */
+  winnerIndex?: number
+  /** Unseal progress 0..4: drives the winner flip (>=1) and loser dim (>=2). */
+  unsealStage?: number
+  /** Second-price value shown on the winner card's open face. */
+  clearingPriceText?: string
+  paymentSymbol?: string
+  /** Dim every filled card (the refunded auction has no winner to reveal). */
   allDimmed?: boolean
-  compact?: boolean
 }
 
 type LandWindow = {
@@ -23,7 +33,14 @@ type LandWindow = {
   seenCount: number
 }
 
-export function BidSlotGrid({ bids, allDimmed = false, compact = false }: BidSlotGridProps) {
+export function BidSlotGrid({
+  bids,
+  winnerIndex,
+  unsealStage = 0,
+  clearingPriceText = '—',
+  paymentSymbol = '',
+  allDimmed = false,
+}: BidSlotGridProps) {
   const [landWindow, setLandWindow] = useState<LandWindow>({
     landFromIndex: bids.length,
     seenCount: bids.length,
@@ -35,31 +52,32 @@ export function BidSlotGrid({ bids, allDimmed = false, compact = false }: BidSlo
     })
   }
 
-  const cardHeightClass = compact ? 'h-32' : 'h-[170px] lg:h-44'
-  const sealSize = compact ? 38 : 48
-
   return (
-    <div className={compact ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-2 gap-3.5 sm:grid-cols-4'}>
+    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-4">
       {Array.from({ length: MAX_BID_SLOTS }).map((_unusedSlot, slotIndex) => {
         const slotBid = bids[slotIndex]
         if (slotBid === undefined) {
+          return <EmptySlot key={`empty-${slotIndex}`} />
+        }
+        if (winnerIndex !== undefined && slotIndex === winnerIndex) {
           return (
-            <EmptySlot
-              key={`empty-${slotIndex}`}
-              slotNumber={slotIndex + 1}
-              compact={compact}
-              className={cardHeightClass}
+            <WinnerFlipCard
+              key={`bid-${slotIndex}`}
+              bid={slotBid}
+              clearingPriceText={clearingPriceText}
+              paymentSymbol={paymentSymbol}
+              flipped={unsealStage >= 1}
+              showStamp={unsealStage >= 3}
             />
           )
         }
+        const dimmed = allDimmed || (winnerIndex !== undefined && unsealStage >= 2)
         return (
           <SealedBidCard
             key={`bid-${slotIndex}`}
             bid={slotBid}
-            sealSize={sealSize}
-            dimmed={allDimmed}
+            dimmed={dimmed}
             landing={slotIndex >= landWindow.landFromIndex}
-            className={cardHeightClass}
           />
         )
       })}

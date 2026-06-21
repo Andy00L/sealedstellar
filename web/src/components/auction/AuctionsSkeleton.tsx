@@ -1,39 +1,33 @@
-// Loading state: a skeleton of the final list layout, never a spinner page.
-// sourceRef: design-handoff/stellar/project/ss-unseal.jsx EdgeLoading recipe
-// applied to the list composition.
+// Loading state: a skeleton of the glass card grid, never a spinner page.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
+// SealedStellar.dc.html list card shape.
 
-import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export function AuctionsSkeleton() {
   return (
-    <div className="grid gap-3.5">
-      <Skeleton className="h-[19px] w-24" />
-      <Card className="grid gap-4 rounded-xl border-border-soft p-6 shadow-card">
-        <div className="flex items-start justify-between">
-          <Skeleton className="h-7 w-44" />
-          <Skeleton className="h-6 w-24 rounded-full" />
-        </div>
-        <div className="flex gap-1.5">
-          {Array.from({ length: 8 }).map((_unusedTick, tickIndex) => (
-            <Skeleton key={tickIndex} className="h-6.5 w-5 rounded-[6px]" />
-          ))}
-        </div>
-        <div className="flex items-end justify-between">
-          <Skeleton className="h-4 w-52" />
-          <Skeleton className="h-9 w-32" />
-        </div>
-        <Skeleton className="h-9 w-full rounded-[12px]" />
-      </Card>
-      <Skeleton className="mt-2 h-[13px] w-14" />
-      {Array.from({ length: 2 }).map((_unusedRow, rowIndex) => (
-        <Card key={rowIndex} className="flex items-center gap-4 rounded-lg border-border-soft p-4 shadow-none">
-          <div className="grid flex-1 gap-1.5">
-            <Skeleton className="h-4 w-36" />
-            <Skeleton className="h-3 w-24" />
+    <div className="grid gap-5 sm:grid-cols-[repeat(auto-fill,minmax(330px,1fr))]">
+      {Array.from({ length: 3 }).map((_unusedCard, cardIndex) => (
+        <div key={cardIndex} className="glass-panel grid gap-5 rounded-[20px] p-5.5">
+          <div className="flex items-start justify-between">
+            <div className="grid gap-1.5">
+              <Skeleton className="h-7 w-40" />
+              <Skeleton className="h-3.5 w-28" />
+            </div>
+            <Skeleton className="h-6 w-20 rounded-full" />
           </div>
-          <Skeleton className="h-6 w-24 rounded-full" />
-        </Card>
+          <div className="flex items-end justify-between border-t border-foreground/7 pt-4">
+            <div className="grid gap-2">
+              <Skeleton className="h-2.5 w-16" />
+              <Skeleton className="h-[18px] w-20" />
+            </div>
+            <div className="flex gap-[3px]">
+              {Array.from({ length: 8 }).map((_unusedPip, pipIndex) => (
+                <Skeleton key={pipIndex} className="h-[15px] w-[11px] rounded-[3px]" />
+              ))}
+            </div>
+          </div>
+        </div>
       ))}
     </div>
   )

@@ -3,6 +3,8 @@
 // 1,000,000 tUSDC units per bidder), so amounts render 1:1 with thousands
 // grouping and no decimal scaling. sourceRef: docs/MOCKS.md item 1.
 
+import type { AuctionTone } from './chain'
+
 const AMOUNT_FORMATTER = new Intl.NumberFormat('en-US')
 
 export function formatTokenAmount(rawAmount: bigint): string {
@@ -39,4 +41,40 @@ export function formatClock(totalSeconds: number): string {
   const minutes = String(Math.floor((clampedSeconds % 3600) / 60)).padStart(2, '0')
   const seconds = String(clampedSeconds % 60).padStart(2, '0')
   return `${hours}:${minutes}:${seconds}`
+}
+
+// Countdown for cards and the room metric: mm:ss below an hour, hh:mm:ss above
+// (the redesign shows mm:ss for short windows).
+export function formatCountdown(remainingSeconds: number): string {
+  const fullClock = formatClock(remainingSeconds)
+  return remainingSeconds >= 3600 ? fullClock : fullClock.slice(3)
+}
+
+// The one tone-specific metric shown on both the list card and the room
+// header, so the two stay in lockstep. The clearing price is the second-price
+// settlement value; null when the AuctionSettled event is unavailable.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects metricFor().
+export type AuctionMetric = {
+  label: string
+  value: string
+}
+
+export function getAuctionMetric(
+  tone: AuctionTone,
+  remainingSeconds: number,
+  clearingPrice: bigint | null,
+): AuctionMetric {
+  if (tone === 'open') {
+    return { label: 'Closes in', value: formatCountdown(remainingSeconds) }
+  }
+  if (tone === 'settled') {
+    return {
+      label: 'Cleared at',
+      value: clearingPrice !== null ? formatTokenAmount(clearingPrice) : 'Settled',
+    }
+  }
+  if (tone === 'refunded') {
+    return { label: 'Status', value: 'Refunded' }
+  }
+  return { label: 'Status', value: 'Closed' }
 }

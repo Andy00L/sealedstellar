@@ -19,6 +19,12 @@ const buttonVariants = cva(
         ghost:
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
+        // Primary call to action after the glass redesign: blue gradient with a
+        // bright top edge and a soft glow (SealedStellar.dc.html primary button).
+        cta: "border-none text-white bg-[linear-gradient(180deg,#3f72e8,#2b5fd9)] shadow-[inset_0_1px_0_rgba(255,255,255,.45),0_6px_18px_rgba(43,95,217,.34)] hover:brightness-[1.04]",
+        // Secondary glass button (cancel, paste-proof, replay).
+        glass:
+          "border border-border bg-[rgba(255,255,255,.6)] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-md hover:bg-[rgba(255,255,255,.8)]",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",

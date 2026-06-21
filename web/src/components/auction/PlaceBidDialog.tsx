@@ -1,12 +1,12 @@
-// Place-bid dialog: amount, sealing pipeline, sealed confirmation, distinct
-// failure sentences. The amount and salt exist only in this component's
-// state and are never rendered after the amount stage, never logged, and
-// never sent anywhere except inside the Poseidon commitment and the
-// operator-encrypted box.
-// sourceRef: design-handoff/stellar/project/ss-flows.jsx PlaceBidDialogDemo.
+// Place-bid dialog: amount, the real sealing pipeline, sealed confirmation,
+// and distinct failure sentences, on the glass surface. The amount and salt
+// exist only in this component's state, are never rendered after the amount
+// stage, never logged, and never sent anywhere except inside the Poseidon
+// commitment and the operator-encrypted box.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
+// SealedStellar.dc.html bid dialog.
 
 import { useState } from 'react'
-import { Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -19,6 +19,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { BidErrorNotice } from '@/components/auction/BidErrorNotice'
 import { SealLockIcon } from '@/components/auction/SealLockIcon'
+import { SealMedallion } from '@/components/auction/SealMedallion'
 import { SealingSteps } from '@/components/auction/SealingSteps'
 import { useWallet } from '@/hooks/useWallet'
 import { sealBid } from '@/lib/crypto'
@@ -41,6 +42,12 @@ type PlaceBidDialogProps = {
   onClose: () => void
 }
 
+// Glass dialog surface: the strong frosted panel, the pop shadow, no opaque
+// background (bg-transparent removes DialogContent's default fill so the
+// glass shows through).
+const DIALOG_CONTENT_CLASS =
+  'glass-panel-strong bg-transparent rounded-[24px] gap-4 p-6 max-w-[440px] shadow-[0_30px_70px_rgba(40,38,52,.28)]'
+
 export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) {
   const { wallet } = useWallet()
   const [dialogStage, setDialogStage] = useState<DialogStage>({ stage: 'amount' })
@@ -62,16 +69,14 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
     if (wallet.status !== 'connected') {
       return
     }
+    const bidderAddress = wallet.address
     const parsedAmount = parseAmount(amountText)
     if (!parsedAmount.ok) {
       setDialogStage({ stage: 'amount', validationMessage: parsedAmount.message })
       return
     }
     if (parsedAmount.value > auction.maxPrice) {
-      setDialogStage({
-        stage: 'amount',
-        validationMessage: `Above the max price of ${depositText}`,
-      })
+      setDialogStage({ stage: 'amount', validationMessage: `Above the max price of ${depositText}` })
       return
     }
 
@@ -79,10 +84,7 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
     setDialogStage({ stage: 'sealing', completedSteps: 0 })
     const sealed = await sealBid(parsedAmount.value, auction.id, auction.operatorEncPubkey)
     if (!sealed.ok) {
-      setDialogStage({
-        stage: 'failed',
-        failure: { kind: 'sealing_failed', detail: sealed.error.detail },
-      })
+      setDialogStage({ stage: 'failed', failure: { kind: 'sealing_failed', detail: sealed.error.detail } })
       return
     }
     setDialogStage({ stage: 'sealing', completedSteps: 3 })
@@ -92,9 +94,8 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
       try {
         const signedResponse = await walletKit.signTransaction(transactionXdr, {
           networkPassphrase: NETWORK_PASSPHRASE,
-          address: wallet.address,
+          address: bidderAddress,
         })
-        setDialogStage({ stage: 'sealing', completedSteps: 4 })
         return { ok: true, value: signedResponse.signedTxXdr }
       } catch {
         return { ok: false, error: 'declined' }
@@ -102,10 +103,11 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
     }
     const submitted = await submitPlaceBid(
       auction.id,
-      wallet.address,
+      bidderAddress,
       sealed.value.commitment,
       sealed.value.encryptedBid,
       signWithFreighter,
+      () => setDialogStage({ stage: 'sealing', completedSteps: 4 }),
     )
     if (!submitted.ok) {
       setDialogStage({ stage: 'failed', failure: submitted.error })
@@ -115,9 +117,7 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
     // Confirmation shows the slot the bid landed in (1-based, per the grid).
     const refreshed = await getAuction(auction.id)
     const slotIndex = refreshed.ok
-      ? refreshed.value.bids.findIndex(
-          (placedBid) => placedBid.commitment === sealed.value.commitment,
-        )
+      ? refreshed.value.bids.findIndex((placedBid) => placedBid.commitment === sealed.value.commitment)
       : -1
     setDialogStage({
       stage: 'sealed',
@@ -129,23 +129,23 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && resetAndClose()}>
-      <DialogContent
-        className="max-w-[380px] gap-4 rounded-xl border-border-soft p-6 shadow-pop"
-        showCloseButton={!sealingIsRunning}
-      >
+      <DialogContent className={DIALOG_CONTENT_CLASS} showCloseButton={!sealingIsRunning}>
         {dialogStage.stage === 'amount' && (
           <>
             <DialogHeader>
-              <DialogTitle className="text-lg font-semibold tracking-[-0.01em]">
+              <DialogTitle className="text-[19px] font-semibold tracking-[-0.01em]">
                 Place a sealed bid
               </DialogTitle>
-              <DialogDescription className="sr-only">
-                Enter your bid amount; it is hashed and encrypted before anything leaves this tab.
+              <DialogDescription className="text-[12.5px] text-muted-foreground">
+                {formatTokenAmount(auction.lotAmount)} {auction.lotSymbol} · pay{' '}
+                {auction.paymentSymbol}
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-1.5">
-              <span className="text-[13.5px] font-medium">Your bid</span>
-              <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3.5 py-1 focus-within:border-primary focus-within:ring-[3px] focus-within:ring-primary/14">
+            <div className="grid gap-2">
+              <span className="text-[10.5px] uppercase tracking-[0.14em] text-ink-faint">
+                Your bid ({auction.paymentSymbol})
+              </span>
+              <div className="flex items-center gap-2 rounded-[14px] border border-border bg-white/65 px-4 shadow-[inset_0_1px_3px_rgba(40,38,52,.08)] focus-within:border-primary focus-within:ring-[3px] focus-within:ring-primary/14">
                 <Input
                   type="text"
                   inputMode="numeric"
@@ -153,43 +153,44 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
                   value={amountText}
                   onChange={(changeEvent) => setAmountText(changeEvent.target.value)}
                   placeholder="0"
-                  className="border-0 p-0 font-mono text-base shadow-none tabular-nums focus-visible:ring-0"
+                  className="h-auto border-0 bg-transparent p-0 py-3.5 font-mono text-[26px] font-medium shadow-none tabular-nums focus-visible:ring-0"
                   aria-label="Bid amount"
                 />
-                <span className="text-[13px] font-medium text-muted-foreground">
-                  {auction.paymentSymbol}
-                </span>
+                <span className="font-mono text-sm text-ink-faint">{auction.paymentSymbol}</span>
               </div>
-              <span className="font-mono text-[12.5px] text-muted-foreground tabular-nums">
-                max price {depositText}
-              </span>
             </div>
             {dialogStage.validationMessage && (
               <BidErrorNotice message={dialogStage.validationMessage} />
             )}
-            <div className="flex items-start gap-2.5 rounded-md bg-primary-soft px-3.5 py-3">
+            <div className="flex gap-2.5">
+              <InfoTile label="Max price" value={formatTokenAmount(auction.maxPrice)} />
+              <InfoTile label="Deposit" value={depositText} />
+            </div>
+            <div className="flex items-start gap-2.5 rounded-[13px] border border-primary/18 bg-[linear-gradient(160deg,rgba(43,95,217,.08),rgba(43,95,217,.04))] px-3.5 py-3">
               <span className="mt-px text-primary">
                 <SealLockIcon size={15} />
               </span>
-              <span className="text-[13px] leading-[1.5] text-muted-foreground">
-                Your amount is hashed and encrypted; only the operator can open it after close. It
-                never appears on chain.
+              <span className="text-[12.5px] leading-[1.5] text-muted-foreground">
+                You escrow the <b className="text-foreground">max price ({depositText})</b> as a
+                uniform deposit. Your real bid is smaller and stays sealed; the deposit leaks
+                nothing.
               </span>
             </div>
-            <span className="text-[13px] text-muted-foreground">
-              You lock a <b className="text-foreground">{depositText} deposit</b>, the same as
-              every other bidder
-            </span>
-            <Button className="w-full" onClick={() => void runSealAndPlace()}>
-              Seal and place bid
-            </Button>
+            <div className="flex gap-3">
+              <Button variant="glass" onClick={resetAndClose}>
+                Cancel
+              </Button>
+              <Button variant="cta" className="flex-1" onClick={() => void runSealAndPlace()}>
+                Seal bid
+              </Button>
+            </div>
           </>
         )}
 
         {dialogStage.stage === 'sealing' && (
           <>
             <DialogHeader>
-              <DialogTitle className="text-lg font-semibold tracking-[-0.01em]">
+              <DialogTitle className="text-[19px] font-semibold tracking-[-0.01em]">
                 Sealing your bid
               </DialogTitle>
               <DialogDescription className="sr-only">
@@ -206,32 +207,28 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
         {dialogStage.stage === 'sealed' && (
           <>
             <DialogHeader>
-              <DialogTitle className="text-lg font-semibold tracking-[-0.01em]">
-                Bid sealed
+              <DialogTitle className="text-[19px] font-semibold tracking-[-0.01em]">
+                Your bid is sealed
               </DialogTitle>
-              <DialogDescription className="sr-only">
-                Your sealed bid is on chain.
-              </DialogDescription>
+              <DialogDescription className="sr-only">Your sealed bid is on chain.</DialogDescription>
             </DialogHeader>
-            <div className="grid justify-items-center gap-2.5 py-2">
-              <span className="grid size-[54px] animate-land place-items-center rounded-full bg-primary-soft text-primary">
-                <Check size={24} strokeWidth={3} aria-hidden="true" />
-              </span>
+            <div className="grid justify-items-center gap-2.5 py-2 text-center">
+              <SealMedallion size={58} className="animate-land" />
               <span className="text-[17px] font-semibold">
                 {dialogStage.slotNumber !== undefined
-                  ? `You hold slot ${dialogStage.slotNumber}`
+                  ? `You hold slot ${dialogStage.slotNumber} of 8`
                   : 'Your bid is sealed on chain'}
               </span>
-              <span className="font-mono text-[13.5px] tabular-nums">
+              <span className="font-mono text-[13.5px] tabular-nums text-muted-foreground">
                 {commitmentToTruncatedHex(dialogStage.commitment)}
               </span>
             </div>
-            <span className="rounded-md border border-border-soft bg-background px-3.5 py-2.75 text-[13px] leading-[1.5] text-muted-foreground">
-              Closing this tab forfeits your local copy of the bid; the operator can still open it
-              from chain after close.
+            <span className="rounded-[13px] border border-border-soft bg-white/45 px-3.5 py-2.75 text-[12.5px] leading-[1.5] text-muted-foreground">
+              No one can read its value, not even the seller. The operator can still open it from
+              chain after close.
             </span>
-            <Button variant="outline" className="w-full" onClick={resetAndClose}>
-              Back to the room
+            <Button variant="cta" onClick={resetAndClose}>
+              Done
             </Button>
           </>
         )}
@@ -239,29 +236,35 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
         {dialogStage.stage === 'failed' && (
           <>
             <DialogHeader>
-              <DialogTitle className="text-lg font-semibold tracking-[-0.01em]">
-                Bid not placed
+              <DialogTitle className="text-[19px] font-semibold tracking-[-0.01em]">
+                Bid not sent
               </DialogTitle>
               <DialogDescription className="sr-only">
                 The bid did not land; the reason is below.
               </DialogDescription>
             </DialogHeader>
             <BidErrorNotice message={describeBidFailure(dialogStage.failure, depositText)} />
-            <div className="flex gap-2.5">
-              <Button
-                className="flex-1"
-                onClick={() => setDialogStage({ stage: 'amount' })}
-              >
-                Try again
+            <div className="flex gap-3">
+              <Button variant="glass" onClick={resetAndClose}>
+                Close
               </Button>
-              <Button variant="outline" className="flex-1" onClick={resetAndClose}>
-                Back to the room
+              <Button variant="cta" className="flex-1" onClick={() => setDialogStage({ stage: 'amount' })}>
+                Try again
               </Button>
             </div>
           </>
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex-1 rounded-xl border border-foreground/6 bg-white/45 px-3.5 py-3">
+      <div className="text-[10px] uppercase tracking-[0.1em] text-ink-faint">{label}</div>
+      <div className="mt-0.75 font-mono text-[14px]">{value}</div>
+    </div>
   )
 }
 

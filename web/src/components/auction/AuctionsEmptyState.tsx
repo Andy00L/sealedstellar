@@ -1,5 +1,5 @@
-// Empty list state: open lock in a dashed ring, explanation, refresh.
-// sourceRef: design-handoff/stellar/project/ss-screens.jsx AuctionsEmptyState.
+// Empty list state: open lock in a dashed ring inside a soft glass panel.
+// sourceRef: design-handoff/hackathon-ui-with-glass-effects glass surfaces.
 
 import { Button } from '@/components/ui/button'
 import { SealLockIcon } from '@/components/auction/SealLockIcon'
@@ -10,7 +10,7 @@ type AuctionsEmptyStateProps = {
 
 export function AuctionsEmptyState({ onRefresh }: AuctionsEmptyStateProps) {
   return (
-    <div className="grid justify-items-center gap-3.5 px-8 py-13 text-center">
+    <div className="glass-soft mx-auto grid max-w-md justify-items-center gap-3.5 rounded-[22px] px-8 py-14 text-center">
       <span className="grid size-16 place-items-center rounded-full border-[1.5px] border-dashed border-foreground/16 text-ink-faint">
         <SealLockIcon size={26} isOpen />
       </span>
@@ -19,7 +19,7 @@ export function AuctionsEmptyState({ onRefresh }: AuctionsEmptyStateProps) {
         Auctions are created from the operator CLI. Once one exists on this contract it will appear
         here.
       </span>
-      <Button variant="outline" size="sm" onClick={onRefresh}>
+      <Button variant="glass" size="sm" onClick={onRefresh}>
         Refresh
       </Button>
     </div>

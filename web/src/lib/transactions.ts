@@ -1,24 +1,33 @@
-// Write path: build, simulate, sign (via an injected wallet signer), send,
-// and confirm contract invocations. Errors travel as values; every stage
-// failure maps to a distinct BidFailure mode for the dialog vocabulary.
+// Write path: build, simulate (prepare), sign via an injected wallet signer,
+// send, and confirm contract invocations. Errors travel as values. One
+// generic submitter drives both place_bid and settle; each public function
+// maps the generic failure to its own distinct vocabulary (BidFailure for the
+// bidder, SettleFailure for the operator).
 
 import {
   Contract,
+  StrKey,
   TransactionBuilder,
   nativeToScVal,
-  rpc,
+  xdr,
 } from '@stellar/stellar-sdk'
 
 import { AUCTION_CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../config'
-import { parseContractErrorCode, type BidFailure, type Result } from './errors'
-import { classifyPlaceBidChainError } from './errors'
+import { rpcServer } from './rpc'
+import {
+  classifyPlaceBidChainError,
+  classifySettleContractError,
+  parseContractErrorCode,
+  type BidFailure,
+  type Result,
+  type SettleFailure,
+} from './errors'
 
-const rpcServer = new rpc.Server(RPC_URL)
-
-// Confirmation reads the transaction status over raw JSON-RPC: the sdk's
-// getTransaction parses the full result meta and throws "Bad union switch:
-// 4" on Protocol 26 transactions (observed against sdk 15.1 on 2026-06-13),
-// while the status string is all the dialog needs.
+// Confirmation reads the transaction status over raw JSON-RPC. getTransaction
+// decodes the full result meta, which has been the fragile path across sdk
+// versions (it threw "Bad union switch: 4" on Protocol 26 at sdk 15.1); the
+// status string is all the UI needs, so we read it directly and skip the meta
+// decode entirely.
 type RawGetTransactionPayload = {
   result?: { status?: string }
 }
@@ -58,46 +67,42 @@ const CONFIRM_POLL_LIMIT = 30
 
 export type WalletSigner = (transactionXdr: string) => Promise<Result<string, 'declined'>>
 
-export type PlaceBidReceipt = {
-  txHash: string
-}
+// Generic invocation failure; the public functions translate these into the
+// per-flow vocabularies. prepare_failed carries the raw simulation detail and
+// any parsed contract error code so each flow classifies it its own way.
+type InvocationFailure =
+  | { kind: 'account_missing'; detail: string }
+  | { kind: 'rpc_unreachable' }
+  | { kind: 'prepare_failed'; detail: string; contractCode: number | undefined }
+  | { kind: 'wallet_declined' }
+  | { kind: 'submission_failed'; detail: string }
 
-export async function submitPlaceBid(
-  auctionId: number,
-  bidderAddress: string,
-  commitment: bigint,
-  encryptedBid: Uint8Array,
+// Build -> prepare -> sign -> send -> confirm for a single contract
+// operation. The source account must exist on chain (friendbot funded).
+async function submitInvocation(
+  sourceAddress: string,
+  operation: xdr.Operation,
   signWithWallet: WalletSigner,
-): Promise<Result<PlaceBidReceipt, BidFailure>> {
-  // 1. Real sequence number: the bidder account must exist (friendbot).
-  let bidderAccount
+  onSigned?: () => void,
+): Promise<Result<{ txHash: string }, InvocationFailure>> {
+  let sourceAccount
   try {
-    bidderAccount = await rpcServer.getAccount(bidderAddress)
+    sourceAccount = await rpcServer.getAccount(sourceAddress)
   } catch (lookupError) {
     const detail = lookupError instanceof Error ? lookupError.message : String(lookupError)
     return {
       ok: false,
       error: detail.toLowerCase().includes('not found')
-        ? { kind: 'submission_failed', detail: 'bidder account does not exist on testnet' }
+        ? { kind: 'account_missing', detail }
         : { kind: 'rpc_unreachable' },
     }
   }
 
-  // 2. Build and simulate (prepare assembles the footprint and resource fee).
-  const contract = new Contract(AUCTION_CONTRACT_ID)
-  const builtTransaction = new TransactionBuilder(bidderAccount, {
+  const builtTransaction = new TransactionBuilder(sourceAccount, {
     fee: BASE_FEE_STROOPS,
     networkPassphrase: NETWORK_PASSPHRASE,
   })
-    .addOperation(
-      contract.call(
-        'place_bid',
-        nativeToScVal(auctionId, { type: 'u64' }),
-        nativeToScVal(bidderAddress, { type: 'address' }),
-        nativeToScVal(commitment, { type: 'u256' }),
-        nativeToScVal(encryptedBid, { type: 'bytes' }),
-      ),
-    )
+    .addOperation(operation)
     .setTimeout(TX_TIMEOUT_SECONDS)
     .build()
 
@@ -106,31 +111,21 @@ export async function submitPlaceBid(
     preparedTransaction = await rpcServer.prepareTransaction(builtTransaction)
   } catch (prepareError) {
     const detail = prepareError instanceof Error ? prepareError.message : String(prepareError)
-    // Token-leg failures first: SAC error codes overlap numerically with the
-    // auction's (the SAC's InsufficientBalance is also #10), so the
-    // diagnostic text markers must win before any code mapping.
-    const textClassified = classifyPlaceBidChainError({ kind: 'simulation_failed', detail })
-    if (textClassified.kind === 'deposit_uncovered') {
-      return { ok: false, error: textClassified }
+    return {
+      ok: false,
+      error: { kind: 'prepare_failed', detail, contractCode: parseContractErrorCode(detail) },
     }
-    const contractErrorCode = parseContractErrorCode(detail)
-    if (contractErrorCode !== undefined) {
-      return {
-        ok: false,
-        error: classifyPlaceBidChainError({ kind: 'contract_error', code: contractErrorCode }),
-      }
-    }
-    return { ok: false, error: textClassified }
   }
 
-  // 3. One wallet signature.
   const signedResult = await signWithWallet(preparedTransaction.toXDR())
   if (!signedResult.ok) {
     return { ok: false, error: { kind: 'wallet_declined' } }
   }
+  if (onSigned) {
+    onSigned()
+  }
   const signedTransaction = TransactionBuilder.fromXDR(signedResult.value, NETWORK_PASSPHRASE)
 
-  // 4. Send and poll to confirmation.
   let sendResponse
   try {
     sendResponse = await rpcServer.sendTransaction(signedTransaction)
@@ -167,7 +162,7 @@ export async function submitPlaceBid(
     }
     if (statusResult.value === 'FAILED') {
       // The raw status carries no diagnostics; a retry re-simulates and
-      // surfaces the precise sentence (deadline, slots, duplicate).
+      // surfaces the precise sentence.
       return {
         ok: false,
         error: { kind: 'submission_failed', detail: 'transaction failed on chain; retry for the reason' },
@@ -177,5 +172,235 @@ export async function submitPlaceBid(
   return {
     ok: false,
     error: { kind: 'submission_failed', detail: 'confirmation timed out; check the explorer' },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// place_bid
+// ---------------------------------------------------------------------------
+
+export type PlaceBidReceipt = {
+  txHash: string
+}
+
+export async function submitPlaceBid(
+  auctionId: number,
+  bidderAddress: string,
+  commitment: bigint,
+  encryptedBid: Uint8Array,
+  signWithWallet: WalletSigner,
+  onSigned?: () => void,
+): Promise<Result<PlaceBidReceipt, BidFailure>> {
+  const operation = new Contract(AUCTION_CONTRACT_ID).call(
+    'place_bid',
+    nativeToScVal(auctionId, { type: 'u64' }),
+    nativeToScVal(bidderAddress, { type: 'address' }),
+    nativeToScVal(commitment, { type: 'u256' }),
+    nativeToScVal(encryptedBid, { type: 'bytes' }),
+  )
+  const outcome = await submitInvocation(bidderAddress, operation, signWithWallet, onSigned)
+  if (outcome.ok) {
+    return { ok: true, value: { txHash: outcome.value.txHash } }
+  }
+  return { ok: false, error: mapInvocationToBidFailure(outcome.error) }
+}
+
+function mapInvocationToBidFailure(failure: InvocationFailure): BidFailure {
+  switch (failure.kind) {
+    case 'account_missing':
+      return { kind: 'submission_failed', detail: 'bidder account does not exist on testnet' }
+    case 'rpc_unreachable':
+      return { kind: 'rpc_unreachable' }
+    case 'wallet_declined':
+      return { kind: 'wallet_declined' }
+    case 'prepare_failed': {
+      // Token-leg failures first: SAC error codes overlap numerically with the
+      // auction's (the SAC InsufficientBalance is also #10), so the diagnostic
+      // text markers must win before any code mapping.
+      const textClassified = classifyPlaceBidChainError({
+        kind: 'simulation_failed',
+        detail: failure.detail,
+      })
+      if (textClassified.kind === 'deposit_uncovered') {
+        return textClassified
+      }
+      if (failure.contractCode !== undefined) {
+        return classifyPlaceBidChainError({ kind: 'contract_error', code: failure.contractCode })
+      }
+      return textClassified
+    }
+    case 'submission_failed':
+      return { kind: 'submission_failed', detail: failure.detail }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// settle (operator flow, real on-chain settlement from a pasted CLI proof)
+// ---------------------------------------------------------------------------
+
+// The fixed byte lengths of the VerifierProof fields (BytesN sizes).
+// sourceRef: contracts/verifier/src/lib.rs Proof { a: BytesN<64>, b:
+// BytesN<128>, c: BytesN<64> }.
+const PROOF_G1_HEX_LENGTH = 128 // 64 bytes
+const PROOF_G2_HEX_LENGTH = 256 // 128 bytes
+
+export type SettleBundle = {
+  auctionId: number
+  winnerIndex: number
+  winningPrice: bigint
+  winnerAddress: string
+  proof: { a: Uint8Array; b: Uint8Array; c: Uint8Array }
+}
+
+export type SettleReceipt = {
+  txHash: string
+}
+
+function hexToBytes(hexText: string, expectedHexLength: number): Uint8Array | null {
+  if (hexText.length !== expectedHexLength || !/^[0-9a-fA-F]+$/.test(hexText)) {
+    return null
+  }
+  const bytes = new Uint8Array(hexText.length / 2)
+  for (let byteIndex = 0; byteIndex < bytes.length; byteIndex += 1) {
+    bytes[byteIndex] = Number.parseInt(hexText.slice(byteIndex * 2, byteIndex * 2 + 2), 16)
+  }
+  return bytes
+}
+
+// Parses and validates the JSON bundle the operator pastes, produced by
+// prover/build-settle-bundle.js (proof from format-args, winner/price/address
+// from build-input's settle meta). Returns a clean reason string on any
+// problem so the stepper can show it verbatim.
+export function parseSettleBundle(
+  rawText: string,
+  expectedAuctionId: number,
+): Result<SettleBundle, string> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawText)
+  } catch {
+    return { ok: false, error: 'That is not valid JSON. Paste the full bundle from build-settle-bundle.js.' }
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { ok: false, error: 'The bundle must be a JSON object.' }
+  }
+  const record = parsed as Record<string, unknown>
+
+  const bundleAuctionId = Number(record.auctionId)
+  if (!Number.isInteger(bundleAuctionId)) {
+    return { ok: false, error: 'The bundle is missing a numeric auctionId.' }
+  }
+  if (bundleAuctionId !== expectedAuctionId) {
+    return {
+      ok: false,
+      error: `This bundle is for auction ${bundleAuctionId}, not auction ${expectedAuctionId}.`,
+    }
+  }
+
+  const winnerIndex = Number(record.winnerIndex)
+  if (!Number.isInteger(winnerIndex) || winnerIndex < 0) {
+    return { ok: false, error: 'The bundle has an invalid winnerIndex.' }
+  }
+
+  if (typeof record.winnerAddress !== 'string' || !StrKey.isValidEd25519PublicKey(record.winnerAddress)) {
+    return { ok: false, error: 'The bundle has an invalid winnerAddress.' }
+  }
+
+  let winningPrice: bigint
+  try {
+    winningPrice = BigInt(String(record.winningPrice))
+  } catch {
+    return { ok: false, error: 'The bundle has an invalid winningPrice.' }
+  }
+  if (winningPrice <= 0n) {
+    return { ok: false, error: 'The clearing price must be a positive integer.' }
+  }
+
+  const proofRecord = record.proof
+  if (typeof proofRecord !== 'object' || proofRecord === null) {
+    return { ok: false, error: 'The bundle is missing the proof object.' }
+  }
+  const proofFields = proofRecord as Record<string, unknown>
+  const proofA = typeof proofFields.a === 'string' ? hexToBytes(proofFields.a, PROOF_G1_HEX_LENGTH) : null
+  const proofB = typeof proofFields.b === 'string' ? hexToBytes(proofFields.b, PROOF_G2_HEX_LENGTH) : null
+  const proofC = typeof proofFields.c === 'string' ? hexToBytes(proofFields.c, PROOF_G1_HEX_LENGTH) : null
+  if (!proofA || !proofB || !proofC) {
+    return {
+      ok: false,
+      error: 'The proof fields a/b/c must be hex strings of 128/256/128 characters.',
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      auctionId: bundleAuctionId,
+      winnerIndex,
+      winningPrice,
+      winnerAddress: record.winnerAddress,
+      proof: { a: proofA, b: proofB, c: proofC },
+    },
+  }
+}
+
+// VerifierProof is a contracttype struct; its ScVal is a map with symbol keys
+// a, b, c (already lexicographically ordered) holding the proof bytes.
+function buildProofScVal(proof: SettleBundle['proof']): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: nativeToScVal('a', { type: 'symbol' }),
+      val: nativeToScVal(proof.a, { type: 'bytes' }),
+    }),
+    new xdr.ScMapEntry({
+      key: nativeToScVal('b', { type: 'symbol' }),
+      val: nativeToScVal(proof.b, { type: 'bytes' }),
+    }),
+    new xdr.ScMapEntry({
+      key: nativeToScVal('c', { type: 'symbol' }),
+      val: nativeToScVal(proof.c, { type: 'bytes' }),
+    }),
+  ])
+}
+
+export async function submitSettle(
+  bundle: SettleBundle,
+  settlerAddress: string,
+  signWithWallet: WalletSigner,
+  onSigned?: () => void,
+): Promise<Result<SettleReceipt, SettleFailure>> {
+  const operation = new Contract(AUCTION_CONTRACT_ID).call(
+    'settle',
+    nativeToScVal(bundle.auctionId, { type: 'u64' }),
+    nativeToScVal(bundle.winnerIndex, { type: 'u32' }),
+    nativeToScVal(bundle.winningPrice, { type: 'i128' }),
+    nativeToScVal(bundle.winnerAddress, { type: 'address' }),
+    buildProofScVal(bundle.proof),
+  )
+  const outcome = await submitInvocation(settlerAddress, operation, signWithWallet, onSigned)
+  if (outcome.ok) {
+    return { ok: true, value: { txHash: outcome.value.txHash } }
+  }
+  return { ok: false, error: mapInvocationToSettleFailure(outcome.error) }
+}
+
+function mapInvocationToSettleFailure(failure: InvocationFailure): SettleFailure {
+  switch (failure.kind) {
+    case 'account_missing':
+      return { kind: 'submission_failed', detail: 'the settling account does not exist on testnet' }
+    case 'rpc_unreachable':
+      return { kind: 'rpc_unreachable' }
+    case 'wallet_declined':
+      return { kind: 'wallet_declined' }
+    case 'prepare_failed': {
+      if (failure.contractCode !== undefined) {
+        const mapped = classifySettleContractError(failure.contractCode)
+        if (mapped) {
+          return mapped
+        }
+      }
+      return { kind: 'submission_failed', detail: failure.detail }
+    }
+    case 'submission_failed':
+      return { kind: 'submission_failed', detail: failure.detail }
   }
 }
