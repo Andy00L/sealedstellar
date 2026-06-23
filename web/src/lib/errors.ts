@@ -199,3 +199,71 @@ export function classifySettleContractError(code: number): SettleFailure | null 
       return null
   }
 }
+
+// ---------------------------------------------------------------------------
+// Create-auction failure vocabulary: the seller flow gets one actionable
+// sentence per failure mode, decoded from the create_auction error variants
+// and the lot-escrow token leg, never a code.
+// sourceRef: contracts/auction/src/lib.rs create_auction() error returns.
+// ---------------------------------------------------------------------------
+
+export type CreateAuctionFailure =
+  | { kind: 'wallet_declined' }
+  | { kind: 'rpc_unreachable' }
+  | { kind: 'lot_uncovered' }
+  | { kind: 'lot_not_positive' }
+  | { kind: 'price_not_positive' }
+  | { kind: 'price_too_large' }
+  | { kind: 'deadline_not_future' }
+  | { kind: 'grace_zero' }
+  | { kind: 'submission_failed'; detail: string }
+
+export function describeCreateAuctionFailure(failure: CreateAuctionFailure): string {
+  switch (failure.kind) {
+    case 'wallet_declined':
+      return 'You declined the signature in your wallet. The auction was not created.'
+    case 'rpc_unreachable':
+      return 'Testnet RPC is not answering. Creating the auction is safe to retry.'
+    case 'lot_uncovered':
+      return 'Your wallet cannot cover the lot. It must hold the lot asset and a trustline for it before you can escrow it.'
+    case 'lot_not_positive':
+      return 'The lot amount must be above zero.'
+    case 'price_not_positive':
+      return 'The max price must be above zero.'
+    case 'price_too_large':
+      return 'The max price is too large; it must fit in 64 bits (at most 18446744073709551615).'
+    case 'deadline_not_future':
+      return 'The bid window must end in the future. Increase the window length.'
+    case 'grace_zero':
+      return 'The grace period must be above zero.'
+    case 'submission_failed':
+      return `The network rejected the auction: ${failure.detail}`
+  }
+}
+
+// Maps a create_auction contract error code to its failure mode, or null when
+// the code is not one create_auction returns (the caller falls back to a
+// generic submission failure).
+export function classifyCreateAuctionContractError(code: number): CreateAuctionFailure | null {
+  switch (code) {
+    case AUCTION_ERROR_CODES.LotAmountNotPositive:
+      return { kind: 'lot_not_positive' }
+    case AUCTION_ERROR_CODES.MaxPriceNotPositive:
+      return { kind: 'price_not_positive' }
+    case AUCTION_ERROR_CODES.MaxPriceExceeds64Bits:
+      return { kind: 'price_too_large' }
+    case AUCTION_ERROR_CODES.DeadlineNotInFuture:
+      return { kind: 'deadline_not_future' }
+    case AUCTION_ERROR_CODES.GracePeriodZero:
+      return { kind: 'grace_zero' }
+    default:
+      return null
+  }
+}
+
+// The lot-escrow leg traps as SAC diagnostic text (not an auction code), the
+// same way the bid deposit leg does. sourceRef: DEPOSIT_FAILURE_MARKERS above.
+export function isLotTransferFailure(detail: string): boolean {
+  const lowercaseDetail = detail.toLowerCase()
+  return DEPOSIT_FAILURE_MARKERS.some((marker) => lowercaseDetail.includes(marker))
+}

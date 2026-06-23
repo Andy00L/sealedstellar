@@ -7,6 +7,8 @@
 // sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
 // SealedStellar.dc.html list screen.
 
+import { Link } from 'react-router'
+
 import { AppShell } from '@/components/layout/AppShell'
 import { AuctionsListBody } from '@/components/auction/AuctionsListBody'
 import { AuctionsToolbar } from '@/components/auction/AuctionsToolbar'
@@ -14,6 +16,7 @@ import { AuctionsEmptyState } from '@/components/auction/AuctionsEmptyState'
 import { AuctionsNoMatches } from '@/components/auction/AuctionsNoMatches'
 import { AuctionsSkeleton } from '@/components/auction/AuctionsSkeleton'
 import { RpcDownNotice } from '@/components/auction/RpcDownNotice'
+import { Button } from '@/components/ui/button'
 import { useAuctionsList } from '@/hooks/useAuctionsList'
 import { useAuctionsListView } from '@/hooks/useAuctionsListView'
 import { useNowSeconds } from '@/hooks/useNowSeconds'
@@ -35,6 +38,12 @@ export function AuctionsRoute() {
   return (
     <AppShell crumb="Testnet" title="Sealed auctions">
       <div className="mx-auto w-full max-w-[1180px] px-5 pb-12 pt-2 sm:px-8">
+        <div className="mb-5 flex justify-end">
+          <Button asChild variant="cta" size="sm">
+            <Link to="/create">Create auction</Link>
+          </Button>
+        </div>
+
         {listState.phase === 'loading' && <AuctionsSkeleton />}
 
         {listState.phase === 'error' && (

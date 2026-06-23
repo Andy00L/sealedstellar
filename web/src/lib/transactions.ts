@@ -15,10 +15,13 @@ import {
 import { AUCTION_CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../config'
 import { rpcServer } from './rpc'
 import {
+  classifyCreateAuctionContractError,
   classifyPlaceBidChainError,
   classifySettleContractError,
+  isLotTransferFailure,
   parseContractErrorCode,
   type BidFailure,
+  type CreateAuctionFailure,
   type Result,
   type SettleFailure,
 } from './errors'
@@ -228,6 +231,83 @@ function mapInvocationToBidFailure(failure: InvocationFailure): BidFailure {
         return classifyPlaceBidChainError({ kind: 'contract_error', code: failure.contractCode })
       }
       return textClassified
+    }
+    case 'submission_failed':
+      return { kind: 'submission_failed', detail: failure.detail }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// create_auction (seller flow). The seller's single signed transaction also
+// authorizes the lot escrow (the sub-invocation transfer into the contract),
+// so no separate approval step is needed; prepareTransaction gathers the auth.
+// ---------------------------------------------------------------------------
+
+export type CreateAuctionParams = {
+  sellerAddress: string
+  rwaToken: string
+  lotAmount: bigint
+  paymentToken: string
+  maxPrice: bigint
+  // Unix seconds; bid window end. u64 on chain.
+  commitDeadline: bigint
+  // Seconds after the deadline before refund_all opens. u64 on chain.
+  gracePeriod: bigint
+  // Poseidon Merkle root of the KYC whitelist. U256 on chain.
+  whitelistRoot: bigint
+  // tweetnacl box public key bids encrypt to. BytesN<32> on chain.
+  operatorEncPubkey: Uint8Array
+}
+
+export type CreateAuctionReceipt = {
+  txHash: string
+}
+
+export async function submitCreateAuction(
+  params: CreateAuctionParams,
+  signWithWallet: WalletSigner,
+  onSigned?: () => void,
+): Promise<Result<CreateAuctionReceipt, CreateAuctionFailure>> {
+  const operation = new Contract(AUCTION_CONTRACT_ID).call(
+    'create_auction',
+    nativeToScVal(params.sellerAddress, { type: 'address' }),
+    nativeToScVal(params.rwaToken, { type: 'address' }),
+    nativeToScVal(params.lotAmount, { type: 'i128' }),
+    nativeToScVal(params.paymentToken, { type: 'address' }),
+    nativeToScVal(params.maxPrice, { type: 'i128' }),
+    nativeToScVal(params.commitDeadline, { type: 'u64' }),
+    nativeToScVal(params.gracePeriod, { type: 'u64' }),
+    nativeToScVal(params.whitelistRoot, { type: 'u256' }),
+    nativeToScVal(params.operatorEncPubkey, { type: 'bytes' }),
+  )
+  const outcome = await submitInvocation(params.sellerAddress, operation, signWithWallet, onSigned)
+  if (outcome.ok) {
+    return { ok: true, value: { txHash: outcome.value.txHash } }
+  }
+  return { ok: false, error: mapInvocationToCreateFailure(outcome.error) }
+}
+
+function mapInvocationToCreateFailure(failure: InvocationFailure): CreateAuctionFailure {
+  switch (failure.kind) {
+    case 'account_missing':
+      return { kind: 'submission_failed', detail: 'the seller account does not exist on testnet' }
+    case 'rpc_unreachable':
+      return { kind: 'rpc_unreachable' }
+    case 'wallet_declined':
+      return { kind: 'wallet_declined' }
+    case 'prepare_failed': {
+      // The lot-escrow token leg traps as diagnostic text; SAC error codes
+      // overlap numerically with the auction's, so the text markers win first.
+      if (isLotTransferFailure(failure.detail)) {
+        return { kind: 'lot_uncovered' }
+      }
+      if (failure.contractCode !== undefined) {
+        const mapped = classifyCreateAuctionContractError(failure.contractCode)
+        if (mapped) {
+          return mapped
+        }
+      }
+      return { kind: 'submission_failed', detail: failure.detail }
     }
     case 'submission_failed':
       return { kind: 'submission_failed', detail: failure.detail }
