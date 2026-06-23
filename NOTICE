@@ -1,0 +1,16 @@
+SealedStellar
+Copyright 2026 Andy00L
+
+This product includes software adapted from the Stellar soroban-examples
+project (https://github.com/stellar/soroban-examples), licensed under the
+Apache License, Version 2.0.
+
+  contracts/verifier/src/lib.rs adapts the groth16_verifier example. The
+  pairing-check structure is taken from that example; this project changed the
+  curve from BLS12-381 to BN254 and stores the verification key once at deploy
+  time through the constructor instead of passing it on every call. See the
+  sourceRef comment at the top of that file.
+
+This product also depends on third-party open-source software, including
+circom and snarkjs (iden3), circomlib, circomlibjs, and tweetnacl. Each is
+distributed under its own license; see the respective package metadata.

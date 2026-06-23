@@ -507,3 +507,62 @@ CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4):
   outcome. A bid strictly above 31000 from the Freighter account wins and
   clears at 31000 (strict-max rule over lower slots). The demo video
   auction will be staged fresh; nothing here pre-reveals it.
+
+## 2026-06-23: submission prep, demo staging, docs, license
+
+Milestone logged late (it predates this entry): auction 7 on the standing
+contract CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4 was settled by
+a Groth16 proof generated entirely IN THE BROWSER and verified true on chain
+(settle tx
+2085aa97eab48047af2da16e717b8e5f1d47ef26aa88cd3b25932afecabd54eb). The CLI paste
+path stays only as a fallback (docs/MOCKS.md item 6).
+
+Drew's decisions this session:
+
+- The demo is filmed as ONE continuous live auction (bid, win, settle on
+  camera), not a two-auction cut.
+- Repo license is Apache-2.0: it matches the soroban-examples verifier the BN254
+  verifier was adapted from and adds a patent grant.
+
+New artifacts for the recording and the public repo:
+
+- scripts/stage-demo-auction.sh: re-runnable; seeds a fresh auction on the
+  STANDING contract with the persisted operator key (pub e2b45dd9...) and the
+  five-member whitelist (root 7829...), three den bids in slots 0 to 2 at
+  18000 / 27000 / 31000, and tops up the lot and every deposit on each run so
+  retakes never drain an account. A Freighter bid strictly above 31000 wins and
+  clears at 31000; the winning bid value is never revealed. The bid window is a
+  CLI argument (default 300 s) so the window can be sized to a single take. Dry
+  run created auction 8 (open, 30 minute window) and it rendered correctly in
+  the app.
+- web/scripts/shoot-screenshots.mjs and docs/screenshots/: four screenshots
+  captured from the running app against live testnet (auctions list; open
+  auction 8 room with three sealed bids and the countdown; settled auction 7
+  room showing the Vickrey clearing price 27000 and the Verified on Soroban
+  stamp; the theme specimen). No console errors during capture; the dry run
+  doubles as the pre-film clean pass.
+- README.md: 30 second pitch, a mermaid architecture diagram, the frozen public
+  signal table, the standing contract ids with Stellar Expert links, the
+  reproduction steps, the real-vs-mocked summary, and prior art (OpenZeppelin
+  and SDF Confidential Tokens, the soroban-examples verifier, circom and
+  snarkjs).
+- LICENSE (Apache-2.0, Copyright 2026 Andy00L) and NOTICE (attribution for the
+  adapted soroban-examples groth16 verifier).
+
+Winner trustline confirmed: the Freighter demo wallet
+GDIVCF6NSGSOXSFOU7H4DUDLOYMERGDKZWMPNVQM6VFNVR26B67FJQBH already holds a tBENJI
+trustline (0 balance) and 100000 base-unit tUSDC, so it can both bid and receive
+the lot. No pre-film wallet action is needed.
+
+Deadline reconciled: the Stellar Hacks Real-World ZK update (2026-06-22) states
+submissions close June 29, 2026. The build plan's internal target stays June 28
+(one-day buffer). No conflict; June 28 remains the internal submit date.
+
+Fresh e2e.sh reproduction from the current tree, 2026-06-23, exit 0 in 682 s
+(README repro evidence). Fresh deploys: verifier
+CAJLKIO6LL6KL4IPBKDMH6AQY7J5TIJVSPCHD3AVYIVDJNVZPU3KHAXC, auction
+CAZC32ZTSOZWMJ2KLYCZOUO5QCPYLRNBVYH5XIX2MDE573SML32M62J4. Winner slot 2, Vickrey
+clearing 310000; settle tx
+b4bd349179398396cbe00d1f2a175dbabc417f8bd64b6e7e24adc48b2913c036, refund tx
+57dd9a09f504e0b3e0e396851abaa06b84ffa9f806a7f7b40bc64d59609a7fa2; all 13 balance
+assertions exact, the auction contract ends holding zero in both tokens.
