@@ -14,3 +14,8 @@ StellarWalletsKit.init({
 })
 
 export const walletKit = StellarWalletsKit
+
+// Re-exported so the provider can re-assert the active wallet on reconnect:
+// disconnect() clears the kit's selected module, so a later connect must set
+// it again before reading selectedModule.
+export { FREIGHTER_ID }
