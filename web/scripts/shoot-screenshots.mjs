@@ -9,7 +9,12 @@ import { mkdirSync, existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
-const OUTPUT_DIR = resolve(SCRIPT_DIR, '../../docs/screenshots')
+// Defaults to the committed README screenshots dir; override SCREENSHOT_OUT_DIR
+// to capture into a scratch dir (for example during verification) without
+// clobbering the committed set.
+const OUTPUT_DIR = process.env.SCREENSHOT_OUT_DIR
+  ? resolve(process.env.SCREENSHOT_OUT_DIR)
+  : resolve(SCRIPT_DIR, '../../docs/screenshots')
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173'
 
 // Which auctions to feature: an open one (staged by stage-demo-auction.sh) and
