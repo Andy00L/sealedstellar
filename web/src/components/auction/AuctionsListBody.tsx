@@ -1,22 +1,20 @@
 // The list body: renders the filtered auctions through a window virtualizer so
 // only the on-screen rows (plus a small overscan) ever mount. That bounds the
 // number of GPU-costly glass cards regardless of how many auctions match, and
-// gives lazy settlement for free: a settled card calls useSettlementInfo only
-// once it scrolls into view (an unmounted card fetches nothing).
-// Why new: the route rendered every card in a static grid; the windowed
-// renderer that makes large lists cheap is new.
+// gives lazy settlement for free: a settled card fetches its clearing price only
+// once it scrolls into view (an unmounted card fetches nothing). On the indexer
+// path the parent supplies hasMore + onReachEnd, so reaching the last row loads
+// the next page (infinite scroll); the RPC path omits them.
 
 import { useEffect, useRef, useState } from 'react'
 import { useWindowVirtualizer } from '@tanstack/react-virtual'
 
 import { AuctionCard } from '@/components/auction/AuctionCard'
 import { AuctionRow } from '@/components/auction/AuctionRow'
-import { type AuctionView } from '@/lib/chain'
-import { type AuctionDensity } from '@/lib/auctions-list-view'
+import { type AuctionDensity, type AuctionListItem } from '@/lib/auctions-list-view'
 
 // Match the comfortable card grid: minimum card width and the gap between
-// cards. Unit: pixels. Source: the card grid template in AuctionsRoute history
-// (gap-5 / minmax(330px, 1fr)).
+// cards. Unit: pixels. Source: the card grid template (gap-5 / minmax(330px)).
 const CARD_MIN_WIDTH_PX = 330
 const GRID_GAP_PX = 20
 // Seed row heights per density (card or row height plus the row gap). The
@@ -27,12 +25,20 @@ const COMPACT_ROW_ESTIMATE_PX = 72
 const ROW_OVERSCAN = 4
 
 type AuctionsListBodyProps = {
-  auctions: AuctionView[]
+  items: AuctionListItem[]
   density: AuctionDensity
   nowSeconds: number
+  hasMore?: boolean
+  onReachEnd?: () => void
 }
 
-export function AuctionsListBody({ auctions, density, nowSeconds }: AuctionsListBodyProps) {
+export function AuctionsListBody({
+  items,
+  density,
+  nowSeconds,
+  hasMore = false,
+  onReachEnd,
+}: AuctionsListBodyProps) {
   const listRef = useRef<HTMLDivElement>(null)
   const [columnCount, setColumnCount] = useState(1)
   const [scrollMargin, setScrollMargin] = useState(0)
@@ -60,7 +66,7 @@ export function AuctionsListBody({ auctions, density, nowSeconds }: AuctionsList
   }, [])
 
   const effectiveColumns = density === 'compact' ? 1 : columnCount
-  const rowCount = Math.ceil(auctions.length / effectiveColumns)
+  const rowCount = Math.ceil(items.length / effectiveColumns)
   const rowEstimate = density === 'compact' ? COMPACT_ROW_ESTIMATE_PX : CARD_ROW_ESTIMATE_PX
 
   const rowVirtualizer = useWindowVirtualizer({
@@ -70,11 +76,24 @@ export function AuctionsListBody({ auctions, density, nowSeconds }: AuctionsList
     scrollMargin,
   })
 
+  const virtualRows = rowVirtualizer.getVirtualItems()
+  const lastVirtualRow = virtualRows.at(-1)
+  const lastVisibleIndex = lastVirtualRow ? lastVirtualRow.index : -1
+
+  // external system: the infinite query. When the last row scrolls into view and
+  // more pages exist, ask the parent to load the next page. onReachEnd is stable
+  // and guards against double-fetching, so this fires once per page boundary.
+  useEffect(() => {
+    if (onReachEnd && hasMore && rowCount > 0 && lastVisibleIndex >= rowCount - 1) {
+      onReachEnd()
+    }
+  }, [onReachEnd, hasMore, rowCount, lastVisibleIndex])
+
   return (
     <div ref={listRef} className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
-      {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+      {virtualRows.map((virtualRow) => {
         const startIndex = virtualRow.index * effectiveColumns
-        const rowAuctions = auctions.slice(startIndex, startIndex + effectiveColumns)
+        const rowItems = items.slice(startIndex, startIndex + effectiveColumns)
         return (
           <div
             key={virtualRow.key}
@@ -85,8 +104,13 @@ export function AuctionsListBody({ auctions, density, nowSeconds }: AuctionsList
           >
             {density === 'compact' ? (
               <div className="pb-2">
-                {rowAuctions.map((auction) => (
-                  <AuctionRow key={auction.id} auction={auction} nowSeconds={nowSeconds} />
+                {rowItems.map((item) => (
+                  <AuctionRow
+                    key={item.view.id}
+                    auction={item.view}
+                    nowSeconds={nowSeconds}
+                    providedClearingPrice={item.clearingPrice}
+                  />
                 ))}
               </div>
             ) : (
@@ -94,8 +118,13 @@ export function AuctionsListBody({ auctions, density, nowSeconds }: AuctionsList
                 className="grid gap-5 pb-5"
                 style={{ gridTemplateColumns: `repeat(${effectiveColumns}, minmax(0, 1fr))` }}
               >
-                {rowAuctions.map((auction) => (
-                  <AuctionCard key={auction.id} auction={auction} nowSeconds={nowSeconds} />
+                {rowItems.map((item) => (
+                  <AuctionCard
+                    key={item.view.id}
+                    auction={item.view}
+                    nowSeconds={nowSeconds}
+                    providedClearingPrice={item.clearingPrice}
+                  />
                 ))}
               </div>
             )}

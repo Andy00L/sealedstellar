@@ -566,3 +566,47 @@ clearing 310000; settle tx
 b4bd349179398396cbe00d1f2a175dbabc417f8bd64b6e7e24adc48b2913c036, refund tx
 57dd9a09f504e0b3e0e396851abaa06b84ffa9f806a7f7b40bc64d59609a7fa2; all 13 balance
 assertions exact, the auction contract ends holding zero in both tokens.
+
+## 2026-06-24: scalable list, create-auction, wallet fix, off-chain indexer
+
+Frontend scalability and feature work beyond the original plan.
+
+- Scalable marketplace list: status tabs, search, asset chips, sort, a
+  Cards/Compact density toggle, all URL-backed (shareable), rendered through a
+  window virtualizer (@tanstack/react-virtual) so only on-screen rows mount.
+  The filter/sort pipeline lives in web/src/lib/auctions-list-view.ts; the data
+  layer reads and the room route are unchanged.
+- Create-auction page (/create): a seller form and the create_auction write path
+  (web/src/lib/transactions.ts submitCreateAuction) with a distinct failure
+  vocabulary; new auctions default to the demo operator key and KYC whitelist so
+  they stay settleable. The single wallet signature also authorizes the lot
+  escrow.
+- Wallet reconnect fix: disconnect() clears the kit's selected module, so the
+  next connect now re-asserts the Freighter selection and is wrapped so it can
+  never hang on "Connecting" (commit c397577).
+
+Off-chain indexer (new indexer/ package; the 10k-auction scale answer with no
+contract change):
+
+- A TypeScript service (Hono 4 + better-sqlite3, run with tsx) that ingests the
+  six auction events into SQLite and serves GET /auctions (status / asset /
+  search / bidder filters, closingSoonest / newest / mostBids sorts, keyset
+  cursor pagination, total count), GET /auctions/:id, and GET /healthz. Read
+  only over public chain data: it only simulates get_auction and reads getEvents,
+  holds no keys, stores ciphertext-free summaries, and never decrypts. CORS is
+  restricted to the web origins, a per-IP token bucket caps request rate, and
+  every query input is validated with a distinct error code.
+- Verified against the standing testnet contract
+  CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4: backfill indexed all
+  10 auctions, the event loop applied 19 events, auction 7 carries clearing
+  price 27000 and settle tx 2085aa97 from the AuctionSettled event, auction 3
+  reads clearing price null (settled outside the ~7-day event window, graceful),
+  keyset pagination returns [10,9,8,7] then [6,5,4,3] with no overlap, and a bad
+  sort returns a distinct HTTP 400.
+- Frontend wiring: the list reads the indexer via @tanstack/react-query
+  (useInfiniteQuery cursor pagination) behind the same AuctionView shape, with
+  infinite scroll, and falls back to the existing RPC probe (useAuctionsList)
+  when the indexer is unreachable, showing a distinct notice. The room route,
+  the data-layer reads, and the deployed contracts are unchanged.
+- Type-check, lint, and build all green; the standards greps are clean across
+  all new and modified files.

@@ -14,6 +14,11 @@ export const STELLAR_EXPERT_TX_BASE = 'https://stellar.expert/explorer/testnet/t
 export const AUCTION_CONTRACT_ID = 'CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4'
 export const VERIFIER_CONTRACT_ID = 'CD7PHFDZMHHCN25FKCERAFVXQC77CQOF55YP57VU3WEVPDY7RCNH6EGO'
 
+// Off-chain indexer base URL (the indexer/ service). The list reads from it for
+// scalable filter / sort / pagination and falls back to direct RPC reads when
+// it is unreachable. TESTNET ONLY, same as the rest of this file.
+export const INDEXER_BASE_URL = 'http://localhost:8787'
+
 // Bid slot cap baked into the circuit and contract.
 // sourceRef: contracts/auction/src/lib.rs MAX_BID_SLOTS
 export const MAX_BID_SLOTS = 8

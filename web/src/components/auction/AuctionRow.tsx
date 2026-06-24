@@ -14,18 +14,20 @@ import { MAX_BID_SLOTS } from '@/config'
 type AuctionRowProps = {
   auction: AuctionView
   nowSeconds: number
+  // Same opt-in as AuctionCard: the indexer path supplies the clearing price so
+  // the row skips the per-row settlement fetch; undefined means fetch it.
+  providedClearingPrice?: bigint | null
 }
 
-export function AuctionRow({ auction, nowSeconds }: AuctionRowProps) {
+export function AuctionRow({ auction, nowSeconds, providedClearingPrice }: AuctionRowProps) {
   const tone = deriveAuctionTone(auction, nowSeconds)
-  const settlementState = useSettlementInfo(auction.id, tone === 'settled')
-  const settlementInfo = settlementState.phase === 'ready' ? settlementState.info : null
+  const shouldFetchSettlement = tone === 'settled' && providedClearingPrice === undefined
+  const settlementState = useSettlementInfo(auction.id, shouldFetchSettlement)
+  const fetchedPrice =
+    settlementState.phase === 'ready' && settlementState.info ? settlementState.info.winningPrice : null
+  const clearingPrice = providedClearingPrice !== undefined ? providedClearingPrice : fetchedPrice
   const filledSlots = countFilledSlots(auction)
-  const metric = getAuctionMetric(
-    tone,
-    auction.commitDeadlineSeconds - nowSeconds,
-    settlementInfo ? settlementInfo.winningPrice : null,
-  )
+  const metric = getAuctionMetric(tone, auction.commitDeadlineSeconds - nowSeconds, clearingPrice)
 
   return (
     <Link

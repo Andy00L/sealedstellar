@@ -21,6 +21,14 @@ export type AuctionsListView = {
   density: AuctionDensity
 }
 
+// A renderable list entry: the auction plus an optional already-known clearing
+// price. The indexer path supplies the clearing price (so the card does not
+// fetch it again); the RPC path leaves it undefined and the card fetches it.
+export type AuctionListItem = {
+  view: AuctionView
+  clearingPrice: bigint | null | undefined
+}
+
 // Final window of an open auction that counts as "closing soon".
 // Unit: seconds. Source: this module (product choice for the list filter).
 export const CLOSING_SOON_THRESHOLD_SECONDS = 3600

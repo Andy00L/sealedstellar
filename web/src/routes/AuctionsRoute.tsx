@@ -1,12 +1,12 @@
-// Auctions list: the home screen. A glass card grid over the ambient field,
-// with a toolbar (status tabs, search, asset chips, sort, density) and a
-// window-virtualized body so the list stays eye-friendly and cheap to render
-// as it grows. The filter and sort pipeline lives in lib/auctions-list-view;
-// this route only wires the data hook, the URL-backed view model, and the
-// connected wallet together.
+// Auctions list: the home screen. It reads from the off-chain indexer (scalable
+// filter / sort / cursor pagination) and falls back to direct RPC reads only
+// when the indexer is unreachable, so the demo never goes dark. Both paths feed
+// the same toolbar and window-virtualized body, which consume a source-agnostic
+// AuctionListItem. The filter and sort pipeline lives in lib/auctions-list-view.
 // sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
 // SealedStellar.dc.html list screen.
 
+import { useCallback } from 'react'
 import { Link } from 'react-router'
 
 import { AppShell } from '@/components/layout/AppShell'
@@ -19,21 +19,31 @@ import { RpcDownNotice } from '@/components/auction/RpcDownNotice'
 import { Button } from '@/components/ui/button'
 import { useAuctionsList } from '@/hooks/useAuctionsList'
 import { useAuctionsListView } from '@/hooks/useAuctionsListView'
+import { useAuctionsQuery } from '@/hooks/useAuctionsQuery'
 import { useNowSeconds } from '@/hooks/useNowSeconds'
 import { useWallet } from '@/hooks/useWallet'
-import { type AuctionView } from '@/lib/chain'
 import {
   collectAssetSymbols,
   selectVisibleAuctions,
+  type AuctionListItem,
   type AuctionsListView,
 } from '@/lib/auctions-list-view'
 
+type AuctionsQueryResult = ReturnType<typeof useAuctionsQuery>
+
+type ListSectionProps = {
+  view: AuctionsListView
+  setView: (next: Partial<AuctionsListView>) => void
+  nowSeconds: number
+  connectedAddress: string | null
+}
+
 export function AuctionsRoute() {
-  const { listState, refreshNow } = useAuctionsList()
   const nowSeconds = useNowSeconds()
   const { view, setView } = useAuctionsListView()
   const { wallet } = useWallet()
   const connectedAddress = wallet.status === 'connected' ? wallet.address : null
+  const indexerQuery = useAuctionsQuery(view, connectedAddress)
 
   return (
     <AppShell crumb="Testnet" title="Sealed auctions">
@@ -44,19 +54,16 @@ export function AuctionsRoute() {
           </Button>
         </div>
 
-        {listState.phase === 'loading' && <AuctionsSkeleton />}
-
-        {listState.phase === 'error' && (
-          <RpcDownNotice retryInSeconds={listState.retryInSeconds} onRetryNow={refreshNow} />
-        )}
-
-        {listState.phase === 'ready' && listState.value.length === 0 && (
-          <AuctionsEmptyState onRefresh={refreshNow} />
-        )}
-
-        {listState.phase === 'ready' && listState.value.length > 0 && (
-          <AuctionsReady
-            auctions={listState.value}
+        {indexerQuery.isError ? (
+          <RpcFallbackList
+            view={view}
+            setView={setView}
+            nowSeconds={nowSeconds}
+            connectedAddress={connectedAddress}
+          />
+        ) : (
+          <IndexerList
+            query={indexerQuery}
             view={view}
             setView={setView}
             nowSeconds={nowSeconds}
@@ -68,17 +75,27 @@ export function AuctionsRoute() {
   )
 }
 
-type AuctionsReadyProps = {
-  auctions: AuctionView[]
-  view: AuctionsListView
-  setView: (next: Partial<AuctionsListView>) => void
-  nowSeconds: number
-  connectedAddress: string | null
-}
+function IndexerList({
+  query,
+  view,
+  setView,
+  nowSeconds,
+  connectedAddress,
+}: ListSectionProps & { query: AuctionsQueryResult }) {
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = query
+  const onReachEnd = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage()
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
-function AuctionsReady({ auctions, view, setView, nowSeconds, connectedAddress }: AuctionsReadyProps) {
-  const visibleAuctions = selectVisibleAuctions(auctions, view, nowSeconds, connectedAddress)
-  const assetSymbols = collectAssetSymbols(auctions)
+  if (query.isPending) {
+    return <AuctionsSkeleton />
+  }
+
+  const items: AuctionListItem[] = query.data ? query.data.pages.flatMap((page) => page.items) : []
+  const totalCount = query.data?.pages[0]?.totalCount ?? items.length
+  const assetSymbols = collectAssetSymbols(items.map((item) => item.view))
 
   return (
     <>
@@ -86,16 +103,64 @@ function AuctionsReady({ auctions, view, setView, nowSeconds, connectedAddress }
         view={view}
         setView={setView}
         assetSymbols={assetSymbols}
+        resultCount={totalCount}
+        walletConnected={connectedAddress !== null}
+      />
+      {items.length === 0 ? (
+        <AuctionsNoMatches
+          onClear={() => setView({ segment: 'all', search: '', assetSymbol: null })}
+        />
+      ) : (
+        <AuctionsListBody
+          items={items}
+          density={view.density}
+          nowSeconds={nowSeconds}
+          hasMore={hasNextPage}
+          onReachEnd={onReachEnd}
+        />
+      )}
+    </>
+  )
+}
+
+function RpcFallbackList({ view, setView, nowSeconds, connectedAddress }: ListSectionProps) {
+  const { listState, refreshNow } = useAuctionsList()
+
+  if (listState.phase === 'loading') {
+    return <AuctionsSkeleton />
+  }
+  if (listState.phase === 'error') {
+    return <RpcDownNotice retryInSeconds={listState.retryInSeconds} onRetryNow={refreshNow} />
+  }
+  if (listState.value.length === 0) {
+    return <AuctionsEmptyState onRefresh={refreshNow} />
+  }
+
+  const visibleAuctions = selectVisibleAuctions(listState.value, view, nowSeconds, connectedAddress)
+  const assetSymbols = collectAssetSymbols(listState.value)
+  const items: AuctionListItem[] = visibleAuctions.map((auctionView) => ({
+    view: auctionView,
+    clearingPrice: undefined,
+  }))
+
+  return (
+    <>
+      <p className="mb-4 text-[12px] text-muted-foreground">
+        The directory is unavailable; showing live chain results.
+      </p>
+      <AuctionsToolbar
+        view={view}
+        setView={setView}
+        assetSymbols={assetSymbols}
         resultCount={visibleAuctions.length}
         walletConnected={connectedAddress !== null}
       />
-
       {visibleAuctions.length === 0 ? (
         <AuctionsNoMatches
           onClear={() => setView({ segment: 'all', search: '', assetSymbol: null })}
         />
       ) : (
-        <AuctionsListBody auctions={visibleAuctions} density={view.density} nowSeconds={nowSeconds} />
+        <AuctionsListBody items={items} density={view.density} nowSeconds={nowSeconds} />
       )}
     </>
   )
