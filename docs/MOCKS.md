@@ -21,9 +21,16 @@ before submission (plan section 9). Updated 2026-06-12.
 4. The whitelist is a demo Poseidon Merkle tree of test addresses standing in
    for an issuer's KYC registry (depth 10, up to 1024 members).
 5. The bidder count is fixed at 8 slots per auction in v1 (circuit size).
-6. Whether proofs are generated in the browser or by the CLI prover for the
-   demo video is decided on days 10-12; if any demo proof comes from the CLI,
-   this file will say so.
+6. Proofs are generated IN THE BROWSER. The operator loads their session (box
+   key plus whitelist members, client-side only), the app fetches the sealed
+   bids from chain, decrypts them, rebuilds the whitelist Merkle path, builds
+   the circuit input, and runs the Groth16 prover (snarkjs with the circuit
+   wasm and the ~5.6 MB proving key) in the tab, then settles with one wallet
+   signature. Verified end to end on testnet: a browser-generated proof
+   verified true on chain and settled auction 7 (tx 2085aa97eab48047af2da16e7
+   17b8e5f1d47ef26aa88cd3b25932afecabd54eb). A CLI-generated proof can be
+   pasted as a fallback if browser proving stalls
+   (prover/build-settle-bundle.js).
 7. Bidder IDENTITIES are public: place_bid transactions are signed and the
    BidPlaced events name the bidder. What stays hidden is every bid AMOUNT,
    the winner's included: settlement reveals only the Vickrey clearing

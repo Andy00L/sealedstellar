@@ -1,13 +1,14 @@
-// Operator settlement flow. Per the chosen architecture (real settle from a
-// CLI-generated proof), the heavy zero-knowledge work runs in the prover CLI,
-// which keeps the operator's decryption key and the 5.6MB proving key off the
-// browser. The operator pastes the proof bundle here; the UI validates it and
-// performs the real, Freighter-signed, on-chain settle. The contract cannot
-// pay out without a valid proof, so secrecy and trustlessness hold together.
+// Operator settlement flow. The proof is generated in the browser: the
+// operator loads their session (box key + whitelist, client-side only), the UI
+// fetches the sealed bids, decrypts them, builds the circuit input, runs the
+// Groth16 prover with snarkjs, and performs the real Freighter-signed settle.
+// The contract cannot pay out without a valid proof, so secrecy and
+// trustlessness hold together. A CLI-generated proof can be pasted as a
+// fallback if browser proving stalls.
 // sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
 // SealedStellar.dc.html operator stepper.
 
-import { useState, type ReactNode } from 'react'
+import { useState, type ChangeEvent, type ReactNode } from 'react'
 import { Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -20,6 +21,12 @@ import {
   type SettleBundle,
   type WalletSigner,
 } from '@/lib/transactions'
+import {
+  generateSettleBundle,
+  parseOperatorSession,
+  type OperatorPhase,
+  type OperatorSession,
+} from '@/lib/operator'
 import { describeSettleFailure, type SettleFailure } from '@/lib/errors'
 import { formatTokenAmount, truncateAddress } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -40,32 +47,88 @@ type OperatorStepperProps = {
 
 type NodeState = 'pending' | 'active' | 'done' | 'error'
 
-// The exact CLI pipeline that produces the bundle, shown so the operator can
-// reproduce it. sourceRef: prover/ scripts + scripts/e2e.sh operator phase.
-const CLI_PIPELINE =
-  'operator-decrypt.js → build-input.js → format-args.js → build-settle-bundle.js'
+// Phase -> progress percent and label for the in-browser prover.
+const PHASE_PERCENT: Record<OperatorPhase, number> = {
+  fetching: 15,
+  decrypting: 40,
+  building: 60,
+  proving: 85,
+  done: 100,
+}
+const PHASE_LABEL: Record<OperatorPhase, string> = {
+  fetching: 'Fetching the sealed bids from chain…',
+  decrypting: 'Decrypting bids and verifying commitments…',
+  building: 'Building the circuit input…',
+  proving: 'Generating the Groth16 proof…',
+  done: 'Proof ready',
+}
 
 export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorStepperProps) {
   const { wallet, connectWallet } = useWallet()
-  const [bundleText, setBundleText] = useState('')
-  const [loadedBundle, setLoadedBundle] = useState<SettleBundle | null>(null)
-  const [bundleError, setBundleError] = useState<string | null>(null)
+  const [session, setSession] = useState<OperatorSession | null>(null)
+  const [sessionError, setSessionError] = useState<string | null>(null)
+  const [provePhase, setProvePhase] = useState<OperatorPhase | null>(null)
+  const [provePercent, setProvePercent] = useState(0)
+  const [proveError, setProveError] = useState<string | null>(null)
+  const [bundle, setBundle] = useState<SettleBundle | null>(null)
+  const [showPaste, setShowPaste] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  const [pasteError, setPasteError] = useState<string | null>(null)
   const [settlePhase, setSettlePhase] = useState<'idle' | 'settling' | 'failed'>('idle')
   const [settleError, setSettleError] = useState<SettleFailure | null>(null)
 
-  const loadBundle = () => {
-    const parsed = parseSettleBundle(bundleText, auction.id)
-    if (!parsed.ok) {
-      setLoadedBundle(null)
-      setBundleError(parsed.error)
+  const isProving = provePhase !== null && bundle === null
+
+  const handleSessionFile = async (changeEvent: ChangeEvent<HTMLInputElement>) => {
+    const file = changeEvent.target.files?.[0]
+    changeEvent.target.value = '' // allow re-selecting the same file
+    if (!file) {
       return
     }
-    setBundleError(null)
-    setLoadedBundle(parsed.value)
+    const parsed = parseOperatorSession(await file.text())
+    if (!parsed.ok) {
+      setSession(null)
+      setSessionError(parsed.error)
+      return
+    }
+    setSessionError(null)
+    setSession(parsed.value)
+  }
+
+  const runGenerateProof = async () => {
+    if (!session) {
+      return
+    }
+    setProveError(null)
+    setBundle(null)
+    setProvePhase('fetching')
+    setProvePercent(PHASE_PERCENT.fetching)
+    const result = await generateSettleBundle(auction, session, (phase) => {
+      setProvePhase(phase)
+      setProvePercent(PHASE_PERCENT[phase])
+    })
+    if (!result.ok) {
+      setProveError(result.error)
+      setProvePhase(null)
+      setProvePercent(0)
+      return
+    }
+    setBundle(result.value)
+    setProvePercent(100)
+  }
+
+  const loadPastedBundle = () => {
+    const parsed = parseSettleBundle(pasteText, auction.id)
+    if (!parsed.ok) {
+      setPasteError(parsed.error)
+      return
+    }
+    setPasteError(null)
+    setBundle(parsed.value)
   }
 
   const runSettle = async () => {
-    if (!loadedBundle) {
+    if (!bundle) {
       return
     }
     if (wallet.status !== 'connected') {
@@ -88,24 +151,30 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
       }
     }
 
-    const result = await submitSettle(loadedBundle, settlerAddress, signWithFreighter)
+    const result = await submitSettle(bundle, settlerAddress, signWithFreighter)
     if (!result.ok) {
       setSettlePhase('failed')
       setSettleError(result.error)
       return
     }
     onSettled({
-      winnerIndex: loadedBundle.winnerIndex,
-      winningPrice: loadedBundle.winningPrice,
-      winnerAddress: loadedBundle.winnerAddress,
+      winnerIndex: bundle.winnerIndex,
+      winningPrice: bundle.winningPrice,
+      winnerAddress: bundle.winnerAddress,
       txHash: result.value.txHash,
     })
   }
 
   const isSettling = settlePhase === 'settling'
-  const proveState: NodeState = loadedBundle ? 'done' : bundleText.trim() ? 'active' : 'pending'
-  const settleNodeState: NodeState =
-    settlePhase === 'failed' ? 'error' : loadedBundle ? 'active' : 'pending'
+  const decryptState: NodeState = session ? 'done' : 'active'
+  const proveState: NodeState = proveError
+    ? 'error'
+    : bundle
+      ? 'done'
+      : isProving || session
+        ? 'active'
+        : 'pending'
+  const settleState: NodeState = settlePhase === 'failed' ? 'error' : bundle ? 'active' : 'pending'
 
   return (
     <div className="glass-panel rounded-[22px] p-6">
@@ -116,68 +185,113 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
         </span>
       </div>
 
-      <StepRow state="done" title="Decrypt bids and build the proof (CLI)">
+      <StepRow state={decryptState} title="Load your operator session">
         <p className="text-[12.5px] text-muted-foreground">
-          {filledSlots} sealed bids. Run the prover pipeline, which keeps the decryption key and
-          proving key off the browser:
+          The box key and whitelist for {filledSlots} sealed bids. Loaded into this tab only, to
+          decrypt and prove locally.
         </p>
-        <code className="mt-2 block rounded-lg bg-foreground/5 px-3 py-2 font-mono text-[11.5px] text-foreground/80">
-          {CLI_PIPELINE}
-        </code>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="inline-flex cursor-pointer items-center rounded-[11px] border border-border bg-white/60 px-4 py-2 text-[13px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,.8)] hover:bg-white/80">
+            <input
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(changeEvent) => void handleSessionFile(changeEvent)}
+            />
+            {session ? 'Re-load session' : 'Load operator session'}
+          </label>
+          {session && (
+            <span className="text-[12.5px] text-muted-foreground">
+              Loaded ({session.whitelist.members.length} whitelist members).
+            </span>
+          )}
+        </div>
+        {sessionError && <FieldError message={sessionError} />}
       </StepRow>
 
-      <StepRow state={proveState} title="Load the proof bundle">
-        <p className="text-[12.5px] text-muted-foreground">
-          Paste the JSON from build-settle-bundle.js. The contract rebuilds the public inputs from
-          storage and verifies the proof; no bid amount is ever revealed.
-        </p>
-        <textarea
-          value={bundleText}
-          onChange={(changeEvent) => setBundleText(changeEvent.target.value)}
-          placeholder="Paste the settle bundle JSON…"
-          spellCheck={false}
-          className="mt-3 min-h-[78px] w-full resize-y rounded-xl border border-border bg-white/60 px-3.5 py-3 font-mono text-[12px] shadow-[inset_0_1px_3px_rgba(40,38,52,.08)] outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/14"
-        />
-        {bundleError && (
-          <p className="mt-2 flex items-start gap-2 text-[12.5px] text-destructive">
-            <span className="mt-1.25 size-1.5 flex-none rounded-full bg-destructive" />
-            {bundleError}
-          </p>
+      <StepRow state={proveState} title="Generate the zero-knowledge proof">
+        <p className="text-[12.5px] text-muted-foreground">Groth16 · in your browser</p>
+
+        {provePhase && (
+          <div className="mt-3.5">
+            <div className="h-[9px] overflow-hidden rounded-full bg-foreground/7 shadow-[inset_0_1px_2px_rgba(40,38,52,.1)]">
+              <div
+                className="h-full rounded-full bg-[linear-gradient(90deg,rgba(43,95,217,.55),#2b5fd9_50%,rgba(43,95,217,.55))] bg-[length:200%_100%] shadow-[0_0_10px_rgba(43,95,217,.5)] transition-[width] duration-300 animate-shimmer"
+                style={{ width: `${provePercent}%` }}
+              />
+            </div>
+            <div className="mt-2 flex justify-between">
+              <span className="font-mono text-[11.5px] text-muted-foreground">
+                {PHASE_LABEL[provePhase]}
+              </span>
+              <span className="font-mono text-[11.5px] text-primary">
+                {Math.round(provePercent)}%
+              </span>
+            </div>
+          </div>
         )}
-        {loadedBundle && (
-          <p className="mt-2 text-[12.5px] text-muted-foreground">
-            Loaded: winner slot {loadedBundle.winnerIndex + 1}, clearing price{' '}
+
+        {bundle && (
+          <p className="mt-2.5 text-[12.5px] text-muted-foreground">
+            Winner slot {bundle.winnerIndex + 1}, clearing price{' '}
             <span className="font-mono text-foreground">
-              {formatTokenAmount(loadedBundle.winningPrice)} {auction.paymentSymbol}
+              {formatTokenAmount(bundle.winningPrice)} {auction.paymentSymbol}
             </span>
             .
           </p>
         )}
-        <div className="mt-3">
-          <Button variant="glass" size="sm" disabled={!bundleText.trim()} onClick={loadBundle}>
-            {loadedBundle ? 'Re-check bundle' : 'Load bundle'}
-          </Button>
+        {proveError && <FieldError message={proveError} />}
+
+        {!bundle && (
+          <div className="mt-3">
+            <Button variant="cta" disabled={!session || isProving} onClick={() => void runGenerateProof()}>
+              {isProving ? 'Proving…' : 'Generate proof'}
+            </Button>
+          </div>
+        )}
+
+        <div className="mt-3 text-[11.5px] text-muted-foreground">
+          Stalled?{' '}
+          <button
+            type="button"
+            onClick={() => setShowPaste((previous) => !previous)}
+            className="cursor-pointer text-primary underline underline-offset-2"
+          >
+            Paste a CLI proof
+          </button>
         </div>
+        {showPaste && (
+          <div className="mt-2.5">
+            <textarea
+              value={pasteText}
+              onChange={(changeEvent) => setPasteText(changeEvent.target.value)}
+              placeholder="Paste the bundle JSON from build-settle-bundle.js…"
+              spellCheck={false}
+              className="min-h-[70px] w-full resize-y rounded-xl border border-border bg-white/60 px-3.5 py-2.5 font-mono text-[12px] shadow-[inset_0_1px_3px_rgba(40,38,52,.08)] outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/14"
+            />
+            {pasteError && <FieldError message={pasteError} />}
+            <Button
+              variant="glass"
+              size="sm"
+              className="mt-2"
+              disabled={!pasteText.trim()}
+              onClick={loadPastedBundle}
+            >
+              Use pasted proof
+            </Button>
+          </div>
+        )}
       </StepRow>
 
-      <StepRow state={settleNodeState} title="Settle on chain" isLast>
+      <StepRow state={settleState} title="Settle on chain" isLast>
         <p className="text-[12.5px] text-muted-foreground">
           {isSettling
             ? 'Confirming settlement on chain…'
             : 'One signature settles the auction. The contract verifies the proof and moves tokens atomically.'}
         </p>
-        {settleError && (
-          <p className="mt-2 flex items-start gap-2 text-[12.5px] text-destructive">
-            <span className="mt-1.25 size-1.5 flex-none rounded-full bg-destructive" />
-            {describeSettleFailure(settleError)}
-          </p>
-        )}
+        {settleError && <FieldError message={describeSettleFailure(settleError)} />}
         <div className="mt-3">
-          <Button
-            variant="cta"
-            disabled={!loadedBundle || isSettling}
-            onClick={() => void runSettle()}
-          >
+          <Button variant="cta" disabled={!bundle || isSettling} onClick={() => void runSettle()}>
             {isSettling
               ? 'Settling…'
               : wallet.status === 'connected'
@@ -187,6 +301,15 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
         </div>
       </StepRow>
     </div>
+  )
+}
+
+function FieldError({ message }: { message: string }) {
+  return (
+    <p className="mt-2 flex items-start gap-2 text-[12.5px] text-destructive">
+      <span className="mt-1.25 size-1.5 flex-none rounded-full bg-destructive" />
+      {message}
+    </p>
   )
 }
 

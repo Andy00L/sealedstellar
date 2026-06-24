@@ -28,6 +28,15 @@ function getPoseidon(): Promise<Poseidon> {
   return poseidonInstancePromise
 }
 
+// A synchronous Poseidon hash (field elements in, bigint out) for the operator
+// pipeline, which hashes many times when rebuilding the whitelist Merkle tree.
+// The wasm is initialized once per session. sourceRef: circuits/test/helpers.js
+// createPoseidonHasher.
+export async function getPoseidonHasher(): Promise<(inputs: bigint[]) => bigint> {
+  const poseidon = await getPoseidon()
+  return (inputs) => poseidon.F.toObject(poseidon(inputs))
+}
+
 export type SealedBidMaterial = {
   commitment: bigint
   encryptedBid: Uint8Array

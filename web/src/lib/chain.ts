@@ -48,6 +48,8 @@ export type AuctionView = {
   lotReclaimed: boolean
   /** tweetnacl box public key bids are encrypted to (plan section 2.2). */
   operatorEncPubkey: Uint8Array
+  /** On-chain Poseidon Merkle whitelist root the winner proves membership in. */
+  whitelistRoot: bigint
   lotSymbol: string
   paymentSymbol: string
 }
@@ -129,6 +131,7 @@ type RawAuctionRecord = {
   bids: { bidder: string; commitment: bigint }[]
   lot_reclaimed: boolean
   operator_enc_pubkey: Uint8Array
+  whitelist_root: bigint
 }
 
 function isRawAuctionRecord(candidate: unknown): candidate is RawAuctionRecord {
@@ -211,6 +214,7 @@ export async function getAuction(auctionId: number): Promise<Result<AuctionView,
       // scValToNative yields a Buffer view; copy into a plain Uint8Array so
       // browser crypto consumers stay free of node typings.
       operatorEncPubkey: Uint8Array.from(rawRecord.operator_enc_pubkey),
+      whitelistRoot: rawRecord.whitelist_root,
       lotSymbol: lotSymbolResult.value,
       paymentSymbol: paymentSymbolResult.value,
     },
@@ -349,6 +353,96 @@ export async function getSettlementInfo(
     }
     settlementCache.set(auctionId, null)
     return { ok: true, value: null }
+  } catch (networkError) {
+    const detail = networkError instanceof Error ? networkError.message : String(networkError)
+    return { ok: false, error: { kind: 'rpc_unreachable', detail } }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bid events: the ciphertexts are emitted in the BidPlaced event (not stored
+// in the auction struct), so the operator recovers them from chain to decrypt
+// (plan section 2.2). sourceRef: prover/fetch-bid-events.js.
+// ---------------------------------------------------------------------------
+
+// Fixed topic for the #[contractevent] BidPlaced struct (snake case of the
+// struct name), with the auction id as the second topic.
+const BID_PLACED_TOPIC = 'bid_placed'
+
+export type BidEvent = {
+  slotIndex: number
+  bidder: string
+  commitment: bigint
+  encryptedBid: Uint8Array
+}
+
+export async function fetchBidEvents(auctionId: number): Promise<Result<BidEvent[], ChainError>> {
+  let latestLedgerSequence: number
+  try {
+    const latestLedger = await rpcServer.getLatestLedger()
+    latestLedgerSequence = latestLedger.sequence
+  } catch (networkError) {
+    const detail = networkError instanceof Error ? networkError.message : String(networkError)
+    return { ok: false, error: { kind: 'rpc_unreachable', detail } }
+  }
+
+  const topicFilter = [
+    nativeToScVal(BID_PLACED_TOPIC, { type: 'symbol' }).toXDR('base64'),
+    nativeToScVal(BigInt(auctionId), { type: 'u64' }).toXDR('base64'),
+  ]
+  try {
+    const matchedEvents: RawEventRecord[] = []
+    let pageCursor: string | undefined
+    for (let pageIndex = 0; pageIndex < 30; pageIndex += 1) {
+      const eventsResponse = await rpcServer.getEvents(
+        pageCursor
+          ? {
+              filters: [
+                { type: 'contract', contractIds: [AUCTION_CONTRACT_ID], topics: [topicFilter] },
+              ],
+              cursor: pageCursor,
+              limit: 200,
+            }
+          : {
+              startLedger: Math.max(1, latestLedgerSequence - EVENT_LOOKBACK_LEDGERS),
+              filters: [
+                { type: 'contract', contractIds: [AUCTION_CONTRACT_ID], topics: [topicFilter] },
+              ],
+              limit: 200,
+            },
+      )
+      matchedEvents.push(...((eventsResponse.events ?? []) as RawEventRecord[]))
+      if (!eventsResponse.cursor) {
+        break
+      }
+      pageCursor = eventsResponse.cursor
+    }
+
+    const bidEvents: BidEvent[] = []
+    for (const eventRecord of matchedEvents) {
+      const eventData = decodeEventScVal(eventRecord.value)
+      if (
+        typeof eventData === 'object' &&
+        eventData !== null &&
+        'slot_index' in eventData &&
+        'encrypted_bid' in eventData
+      ) {
+        const dataRecord = eventData as {
+          slot_index: number | bigint
+          bidder: string
+          commitment: bigint
+          encrypted_bid: Uint8Array
+        }
+        bidEvents.push({
+          slotIndex: Number(dataRecord.slot_index),
+          bidder: dataRecord.bidder,
+          commitment: BigInt(dataRecord.commitment),
+          encryptedBid: Uint8Array.from(dataRecord.encrypted_bid),
+        })
+      }
+    }
+    bidEvents.sort((firstBid, secondBid) => firstBid.slotIndex - secondBid.slotIndex)
+    return { ok: true, value: bidEvents }
   } catch (networkError) {
     const detail = networkError instanceof Error ? networkError.message : String(networkError)
     return { ok: false, error: { kind: 'rpc_unreachable', detail } }
