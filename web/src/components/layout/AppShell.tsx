@@ -9,6 +9,7 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { AmbientField } from '@/components/layout/AmbientField'
+import { FaucetButton } from '@/components/layout/FaucetButton'
 import { WalletButton } from '@/components/layout/WalletButton'
 import { SealMedallion } from '@/components/auction/SealMedallion'
 
@@ -89,8 +90,9 @@ function TopBar({ crumb, title, backTo, trailing }: Omit<AppShellProps, 'childre
           </div>
         </div>
       </div>
-      <div className="flex flex-none items-center gap-3">
+      <div className="flex flex-none items-center gap-2.5">
         {trailing}
+        <FaucetButton />
         <WalletButton />
       </div>
     </div>
