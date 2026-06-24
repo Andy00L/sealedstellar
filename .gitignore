@@ -13,9 +13,16 @@ test_snapshots/
 # "Hackathon UI with Glass Effects-handoff.zip".
 *-handoff.zip
 design-handoff/
+
+# Internal UI design-system handoff (kept local, not distributed with the repo).
+docs/UI_DESIGN_SYSTEM.md
 contracts/target/
 target/
 node_modules/
+
+# Circuit assets copied into the web app at predev/prebuild for the browser
+# prover (derived from circuits/build, which is the committed source).
+web/public/circuit/
 
 # Local environment files: documented in .env.example, never committed
 .env
