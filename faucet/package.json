@@ -1,0 +1,22 @@
+{
+  "name": "sealedstellar-faucet",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Testnet-only faucet for the SealedStellar mock assets: mints tBENJI and tUSDC to a wallet that already holds their trustlines by invoking the stellar CLI (token-issuer alias), so the service holds no secret. It never indexes, never reads bids, and never decrypts. TESTNET ONLY.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.6",
+    "@stellar/stellar-sdk": "^16.0.1",
+    "hono": "^4.12.27"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

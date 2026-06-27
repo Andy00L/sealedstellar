@@ -610,3 +610,49 @@ contract change):
   the data-layer reads, and the deployed contracts are unchanged.
 - Type-check, lint, and build all green; the standards greps are clean across
   all new and modified files.
+
+## 2026-06-24: in-app test-token faucet + Vercel deploy prep
+
+An in-app faucet so any wallet (a judge's, a tester's) can self-fund the demo,
+plus the frontend changes needed to host the app on Vercel.
+
+Faucet (new faucet/ package; the "Add tokens" action next to the wallet button):
+- The problem: tBENJI and tUSDC are issuer-controlled SACs, so only the issuer
+  can mint them and a wallet must hold a trustline before it can receive them.
+  The browser can do neither (the issuer key must never reach it; a wallet can
+  only sign its own trustline). The previous path funded one hardcoded demo
+  wallet from the CLI.
+- The button (web/src/components/layout/FaucetButton.tsx) opens a dialog: Get XLM
+  (friendbot, unchanged) and Add tokens. Add tokens (web/src/lib/faucet.ts) reads
+  the wallet's trustlines from Horizon, signs one changeTrust for any missing
+  asset through Freighter, then calls the faucet service.
+- The service mints by shelling out to the stellar CLI (token-issuer alias, via
+  execFile with an argv array, never a shell string), exactly like
+  stage-demo-auction.sh, so the process holds NO secret. It exposes
+  POST /faucet {address} and GET /healthz, validates the address (StrKey), caps
+  rate per IP (token bucket) and per address (60s cooldown), restricts CORS to
+  the web origins, and returns distinct 400 / 429 / 502. Decision: a separate
+  service, not part of the read-only indexer, so the indexer stays secret-free
+  and safe to expose. The mint uses the SAC mint in base units (not a classic
+  payment) to match the contract / config convention.
+- Verified against the standing testnet SACs: POST to a trustlined wallet minted
+  500000 tUSDC + 500000 tBENJI (balances moved 300000 to 800000 and 500000 to
+  1000000, real tx hashes), a repeat returned 429 (cooldown), an untrusted wallet
+  returned 400 no_trustline, and a malformed address returned 400. The service
+  boots with no .env and no key.
+
+Vercel deploy prep (frontend only; the indexer and faucet are long-running and
+do not fit serverless):
+- INDEXER_BASE_URL and FAUCET_BASE_URL now read from import.meta.env.VITE_* with
+  the localhost values as fallback (web/src/config.ts), declared in
+  web/src/vite-env.d.ts so they stay typed (string | undefined), never untyped.
+  Confirmed the override inlines into the bundle and the fallback returns without
+  it.
+- web/vercel.json adds the SPA rewrite so react-router deep links survive a
+  refresh. To deploy: Root Directory = web, Vite preset, set the two VITE_ vars
+  to the hosted (https) backends, or leave the indexer one unset to run on the
+  RPC fallback. The indexer and faucet, if wanted live, belong on an always-on
+  host (Railway / Render / Fly), served over https, with the Vercel origin added
+  to their ALLOWED_ORIGINS.
+- Faucet tsc and the web build are green; the standards greps are clean across
+  all new and modified files.

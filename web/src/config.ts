@@ -15,9 +15,10 @@ export const AUCTION_CONTRACT_ID = 'CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJU
 export const VERIFIER_CONTRACT_ID = 'CD7PHFDZMHHCN25FKCERAFVXQC77CQOF55YP57VU3WEVPDY7RCNH6EGO'
 
 // Off-chain indexer base URL (the indexer/ service). The list reads from it for
-// scalable filter / sort / pagination and falls back to direct RPC reads when
-// it is unreachable. TESTNET ONLY, same as the rest of this file.
-export const INDEXER_BASE_URL = 'http://localhost:8787'
+// scalable filter / sort / pagination and falls back to direct RPC reads when it
+// is unreachable. Override per deployment with VITE_INDEXER_BASE_URL (https in
+// production); unset uses the local dev port. TESTNET ONLY.
+export const INDEXER_BASE_URL = import.meta.env.VITE_INDEXER_BASE_URL ?? 'http://localhost:8787'
 
 // Bid slot cap baked into the circuit and contract.
 // sourceRef: contracts/auction/src/lib.rs MAX_BID_SLOTS
@@ -46,3 +47,13 @@ export const KNOWN_TOKENS: readonly KnownToken[] = [
   { symbol: 'tBENJI', contractId: 'CDUTXMK5MGOXSBUPZNQZ6J5RCQEVC4MOMYW72WXVUWV5W7OCXJIGJUGN' },
   { symbol: 'tUSDC', contractId: 'CDIKPNCUSBHSTGD5GZKKHPK6BVE732BUCKQ3EPLYMSLUSHEZPAFTNPVX' },
 ]
+
+// The faucet service (the faucet/ package) mints the demo test assets to any
+// wallet that already holds their trustlines. The browser never sees the issuer
+// key; it only signs its own trustline and calls this endpoint. Override per
+// deployment with VITE_FAUCET_BASE_URL (https in production). TESTNET ONLY.
+export const FAUCET_BASE_URL = import.meta.env.VITE_FAUCET_BASE_URL ?? 'http://localhost:8788'
+
+// Issuer of the demo assets, needed client-side only to build the trustline
+// (changeTrust) for tUSDC / tBENJI. Public data. sourceRef: docs/MOCKS.md.
+export const TOKEN_ISSUER_PUBLIC_KEY = 'GDYLKSRXQZ7Y2Y44HDKVXB74WSXFRZRMGHKGG5XXO7ZFOWU7HWVYRR3G'
