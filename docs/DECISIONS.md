@@ -656,3 +656,27 @@ do not fit serverless):
   to their ALLOWED_ORIGINS.
 - Faucet tsc and the web build are green; the standards greps are clean across
   all new and modified files.
+
+## 2026-06-30: faucet moved to a Vercel serverless function (hostable)
+
+The CLI faucet (faucet/) only runs where the stellar CLI and the token-issuer
+keystore exist, so it cannot be hosted. To make the Add tokens button work on the
+deployed site without a paid always-on host, the mint now runs as a Vercel
+serverless function.
+
+- web/api/faucet.ts: a same-origin function (POST /api/faucet) that mints tUSDC +
+  tBENJI via the SDK, signed by a Keypair built from the SERVER-SIDE ISSUER_SECRET
+  env var (a non-VITE_ var, so it never enters the client bundle). Validates the
+  address (StrKey), best-effort per-address cooldown, asserts the secret derives to
+  the expected issuer, refuses a non-testnet RPC, maxDuration 60s.
+- web/src/lib/faucet.ts now POSTs the relative /api/faucet (no separate host, no
+  CORS), so FAUCET_BASE_URL and VITE_FAUCET_BASE_URL are removed from config and
+  vite-env.
+- Deploy: set ISSUER_SECRET as a Vercel env var (NOT prefixed VITE_) and redeploy.
+  The trustline step stays client-side (Freighter) as before. The hosted indexer on
+  Render is unaffected.
+- The standalone faucet/ package is superseded by this function; kept for local use,
+  safe to remove.
+- Web build and the scoped function tsc are green, greps clean. The runtime mint is
+  to be confirmed on the first live click (the SDK-signed path needs the issuer
+  secret, which only the deploy holds).

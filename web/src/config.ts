@@ -48,12 +48,6 @@ export const KNOWN_TOKENS: readonly KnownToken[] = [
   { symbol: 'tUSDC', contractId: 'CDIKPNCUSBHSTGD5GZKKHPK6BVE732BUCKQ3EPLYMSLUSHEZPAFTNPVX' },
 ]
 
-// The faucet service (the faucet/ package) mints the demo test assets to any
-// wallet that already holds their trustlines. The browser never sees the issuer
-// key; it only signs its own trustline and calls this endpoint. Override per
-// deployment with VITE_FAUCET_BASE_URL (https in production). TESTNET ONLY.
-export const FAUCET_BASE_URL = import.meta.env.VITE_FAUCET_BASE_URL ?? 'http://localhost:8788'
-
 // Issuer of the demo assets, needed client-side only to build the trustline
 // (changeTrust) for tUSDC / tBENJI. Public data. sourceRef: docs/MOCKS.md.
 export const TOKEN_ISSUER_PUBLIC_KEY = 'GDYLKSRXQZ7Y2Y44HDKVXB74WSXFRZRMGHKGG5XXO7ZFOWU7HWVYRR3G'

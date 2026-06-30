@@ -5,7 +5,6 @@
 // fallbacks in config.ts are type-checked. TESTNET ONLY.
 interface ImportMetaEnv {
   readonly VITE_INDEXER_BASE_URL?: string
-  readonly VITE_FAUCET_BASE_URL?: string
 }
 
 interface ImportMeta {

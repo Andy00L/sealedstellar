@@ -9,12 +9,16 @@
 import { Asset, Horizon, Operation, TransactionBuilder } from '@stellar/stellar-sdk'
 
 import {
-  FAUCET_BASE_URL,
   HORIZON_URL,
   KNOWN_TOKENS,
   NETWORK_PASSPHRASE,
   TOKEN_ISSUER_PUBLIC_KEY,
 } from '../config'
+
+// The faucet runs as a same-origin Vercel serverless function (web/api/faucet.ts),
+// so this is a relative path: no separate host, no CORS. The issuer key lives only
+// in that function's server-side env.
+const FAUCET_ENDPOINT = '/api/faucet'
 import type { Result } from './errors'
 import type { WalletSigner } from './transactions'
 
@@ -127,7 +131,7 @@ type FaucetResponseBody = {
 async function callFaucetService(address: string): Promise<Result<TestTokenGrant[], FaucetClientError>> {
   let response: Response
   try {
-    response = await fetch(`${FAUCET_BASE_URL}/faucet`, {
+    response = await fetch(FAUCET_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ address }),
@@ -180,7 +184,7 @@ export function describeFaucetClientError(error: FaucetClientError): string {
     case 'trustline_failed':
       return `Adding the trustline failed: ${error.detail}`
     case 'faucet_unreachable':
-      return 'The faucet service is not reachable. Make sure it is running on port 8788.'
+      return 'The faucet is not reachable right now. Try again in a moment.'
     case 'faucet_rejected':
       return `The faucet declined the request: ${error.detail}`
   }
