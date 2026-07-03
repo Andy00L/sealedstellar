@@ -42,7 +42,7 @@ type TokenPickerDialogProps = {
 // Glass dialog surface: strong frosted panel, no opaque fill so the glass shows
 // through. sourceRef: PlaceBidDialog DIALOG_CONTENT_CLASS.
 const DIALOG_CONTENT_CLASS =
-  'glass-panel-strong bg-transparent rounded-[24px] gap-4 p-6 max-w-[460px] shadow-[0_30px_70px_rgba(40,38,52,.28)]'
+  'glass-panel-strong bg-[#fbfaf7] rounded-[24px] gap-4 p-6 max-w-[460px] shadow-[0_36px_80px_rgba(40,38,52,.38)]'
 
 function shortContractId(contractId: string): string {
   return `${contractId.slice(0, 6)}…${contractId.slice(-4)}`
@@ -91,7 +91,7 @@ export function TokenPickerDialog({
         </DialogHeader>
 
         {state.phase === 'loading' && (
-          <span className="rounded-[13px] border border-border-soft bg-white/45 px-3.5 py-3 text-[12.5px] text-muted-foreground">
+          <span className="rounded-[13px] border border-border bg-[#f3f1ec] px-3.5 py-3 text-[12.5px] text-muted-foreground">
             Reading your wallet balances…
           </span>
         )}
@@ -108,7 +108,7 @@ export function TokenPickerDialog({
         {state.phase === 'ready' && (
           <div className="grid max-h-[280px] gap-2 overflow-y-auto pr-0.5">
             {state.assets.length === 0 ? (
-              <span className="rounded-[13px] border border-border-soft bg-white/45 px-3.5 py-3 text-[12.5px] text-muted-foreground">
+              <span className="rounded-[13px] border border-border bg-[#f3f1ec] px-3.5 py-3 text-[12.5px] text-muted-foreground">
                 No issued tokens in this wallet. Paste one below to auction it.
               </span>
             ) : (
@@ -120,11 +120,11 @@ export function TokenPickerDialog({
                     type="button"
                     onClick={() => onPick(asset)}
                     disabled={isAdded}
-                    className="flex items-center justify-between gap-3 rounded-[13px] border border-border-soft bg-white/55 px-3.5 py-2.75 text-left transition hover:border-primary/40 hover:bg-white/80 disabled:cursor-default disabled:opacity-60"
+                    className="flex items-center justify-between gap-3 rounded-[13px] border border-border bg-[#f3f1ec] px-3.5 py-2.75 text-left transition hover:border-primary/50 hover:bg-primary-soft disabled:cursor-default disabled:opacity-60"
                   >
                     <span className="flex flex-col">
                       <span className="font-mono text-[14px] font-medium">{asset.symbol}</span>
-                      <span className="font-mono text-[11px] text-ink-faint">
+                      <span className="font-mono text-[11px] text-muted-foreground">
                         {shortContractId(asset.contractId)}
                       </span>
                     </span>
@@ -135,7 +135,7 @@ export function TokenPickerDialog({
                         </span>
                       )}
                       {isAdded && (
-                        <span className="block text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                        <span className="block text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
                           added
                         </span>
                       )}
@@ -147,8 +147,8 @@ export function TokenPickerDialog({
           </div>
         )}
 
-        <div className="grid gap-2 border-t border-border-soft pt-4">
-          <span className="text-[10.5px] uppercase tracking-[0.14em] text-ink-faint">
+        <div className="grid gap-2 border-t border-border pt-4">
+          <span className="text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
             Paste a token
           </span>
           <div className="flex gap-2">
@@ -158,14 +158,14 @@ export function TokenPickerDialog({
               onChange={(changeEvent) => setManualInput(changeEvent.target.value)}
               placeholder="C... or CODE:ISSUER"
               aria-label="Token contract id or code and issuer"
-              className="rounded-[12px] border-border bg-white/65 font-mono text-[12.5px]"
+              className="rounded-[12px] border-border bg-[#f3f1ec] font-mono text-[12.5px] shadow-[inset_0_1px_2px_rgba(40,38,52,.06)]"
             />
             <Button variant="cta" onClick={handleManualAdd} disabled={manualInput.trim() === ''}>
               Add
             </Button>
           </div>
           {manualError !== undefined && <BidErrorNotice message={manualError} />}
-          <span className="text-[11.5px] leading-[1.5] text-ink-faint">
+          <span className="text-[11.5px] leading-[1.5] text-muted-foreground">
             The token needs its Soroban contract deployed on testnet before it can be auctioned.
           </span>
         </div>
