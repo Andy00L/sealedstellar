@@ -334,9 +334,10 @@ export function CreateAuctionRoute() {
             </div>
 
             <span className="rounded-[13px] border border-border-soft bg-white/45 px-3.5 py-2.75 text-[12px] leading-[1.5] text-muted-foreground">
-              New auctions use the demo operator key and KYC whitelist, so the demo operator can
-              settle them and only whitelisted accounts can win. The max price is escrowed by each
-              bidder as a uniform deposit.
+              New auctions use the demo operator key and KYC whitelist. Only whitelisted accounts
+              can win: a non-whitelisted wallet may still bid, but if its bid is the top bid the
+              auction cannot be settled and only refunds after the grace period. The max price is
+              escrowed by each bidder as a uniform deposit.
             </span>
 
             {createStage.stage === 'form' && createStage.validationMessage && (

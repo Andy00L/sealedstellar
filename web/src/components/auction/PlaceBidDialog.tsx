@@ -29,6 +29,7 @@ import { getAuction, type AuctionView } from '@/lib/chain'
 import { submitPlaceBid, type WalletSigner } from '@/lib/transactions'
 import { walletKit } from '@/lib/wallet-kit'
 import { NETWORK_PASSPHRASE } from '@/config'
+import { DEMO_WHITELIST_MEMBERS, DEMO_WHITELIST_ROOT_DECIMAL } from '@/lib/demo-whitelist'
 
 type DialogStage =
   | { stage: 'amount'; validationMessage?: string }
@@ -55,6 +56,12 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
 
   const depositText = `${formatTokenAmount(auction.maxPrice)} ${auction.paymentSymbol}`
   const sealingIsRunning = dialogStage.stage === 'sealing'
+  // Warn a connected bidder whose wallet is not on this auction's KYC whitelist:
+  // it can bid, but a winning bid from it cannot be settled (refund only). Only
+  // the demo whitelist members are known app-side, so scope the check to that root.
+  const usesDemoWhitelist = auction.whitelistRoot === BigInt(DEMO_WHITELIST_ROOT_DECIMAL)
+  const showWhitelistWarning =
+    usesDemoWhitelist && wallet.status === 'connected' && !DEMO_WHITELIST_MEMBERS.includes(wallet.address)
 
   const resetAndClose = () => {
     if (sealingIsRunning) {
@@ -176,6 +183,14 @@ export function PlaceBidDialog({ auction, open, onClose }: PlaceBidDialogProps) 
                 nothing.
               </span>
             </div>
+            {showWhitelistWarning && (
+              <div className="rounded-[13px] border border-destructive/25 bg-destructive/[0.06] px-3.5 py-3 text-[12.5px] leading-[1.5] text-foreground">
+                <b className="text-destructive">This wallet is not whitelisted.</b> It can seal a
+                bid, but it is not KYC-approved to win. If this turns out to be the top bid, the
+                auction cannot be settled and only refunds after the grace period. Bid from a
+                whitelisted wallet to win.
+              </div>
+            )}
             <div className="flex gap-3">
               <Button variant="glass" onClick={resetAndClose}>
                 Cancel
