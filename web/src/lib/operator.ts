@@ -1,26 +1,27 @@
-// In-browser operator prover. Runs the whole settlement pipeline client-side:
-// fetch the sealed bids from chain, decrypt them with the operator box key,
-// pick the Vickrey winner and second price, rebuild the whitelist Merkle path,
-// assemble the circuit input, generate the Groth16 proof with snarkjs, and
-// pack it to the Soroban byte layout. Output is a SettleBundle that submitSettle
-// consumes unchanged, so the on-chain settle path is identical to the
-// CLI-paste route. Nothing secret is logged.
+// In-browser operator prover. The sealed bids are decrypted server-side by
+// /api/reveal (the operator box secret never enters the browser); this module
+// takes those revealed bids and runs the rest of the settlement in the tab:
+// verify each commitment, pick the Vickrey winner and second price, rebuild the
+// whitelist Merkle path, assemble the circuit input, generate the Groth16 proof
+// with snarkjs, and pack it to the Soroban byte layout. Output is a SettleBundle
+// that submitSettle signs and sends, so the on-chain settle path is unchanged.
+// The prover runs here because snarkjs cannot cold-start in a Vercel serverless
+// function; the browser runs it fine. Nothing secret is logged.
 //
 // This ports the operator CLI scripts to the browser:
-//   prover/operator-decrypt.js  -> decryptBid
-//   circuits/test/helpers.js     -> selectVickreyOutcome, computeAddressLeaf,
-//                                   PoseidonMerkleTree
-//   prover/build-input.js        -> input assembly in generateSettleBundle
-//   prover/format-args.js        -> packG1/packG2 with the G2 limb swap
+//   circuits/test/helpers.js  -> selectVickreyOutcome, computeAddressLeaf,
+//                                PoseidonMerkleTree
+//   prover/build-input.js     -> input assembly in assembleAndProve
+//   prover/format-args.js     -> packG1/packG2 with the G2 limb swap
 
 import { StrKey } from '@stellar/stellar-sdk'
 import { groth16, type Groth16Proof } from 'snarkjs'
-import nacl from 'tweetnacl'
 
-import { fetchBidEvents, type AuctionView } from './chain'
 import { getPoseidonHasher } from './crypto'
 import type { Result } from './errors'
+import type { RevealedBid } from './reveal'
 import type { SettleBundle } from './transactions'
+import type { AuctionView } from './chain'
 import { MAX_BID_SLOTS } from '../config'
 
 // Served from web/public/circuit (copied from circuits/build at predev/prebuild).
@@ -31,30 +32,17 @@ const CIRCUIT_ZKEY_URL = '/circuit/auction_winner.zkey'
 // sourceRef: circuits/auction_winner.circom, circuits/test/helpers.js.
 const MERKLE_DEPTH = 10
 
-// Frozen ciphertext layout (sourceRef: prover/make-bid.js, operator-decrypt.js).
-const NONCE_BYTES = 24
-const EPHEMERAL_PUB_BYTES = 32
-const PRICE_BYTES = 8
-const SALT_BYTES = 31
-
-export type ProofBytes = {
-  a: Uint8Array // G1, 64 bytes
-  b: Uint8Array // G2, 128 bytes
-  c: Uint8Array // G1, 64 bytes
-}
-
-export type OperatorSession = {
-  /** tweetnacl box secret key (32 bytes / 64 hex), client-side only. */
-  secretKeyHex: string
-  /** The whitelist member addresses in leaf order (root rebuilt and checked). */
-  whitelist: { members: { address: string }[] }
-}
-
 export type OperatorPhase = 'fetching' | 'decrypting' | 'building' | 'proving' | 'done'
 
 // ---------------------------------------------------------------------------
 // Proof packing (sourceRef: prover/format-args.js)
 // ---------------------------------------------------------------------------
+
+type ProofBytes = {
+  a: Uint8Array // G1, 64 bytes
+  b: Uint8Array // G2, 128 bytes
+  c: Uint8Array // G1, 64 bytes
+}
 
 function toBigEndianHex32(value: bigint): string {
   return value.toString(16).padStart(64, '0')
@@ -89,9 +77,7 @@ function packProof(proof: Groth16Proof): ProofBytes {
 
 // Runs the witness generator + Groth16 prover in the browser and returns the
 // Soroban-packed proof bytes. The proving key is ~5.6MB and fetched once.
-export async function proveCircuit(
-  circuitInput: Record<string, unknown>,
-): Promise<Result<ProofBytes, string>> {
+async function proveCircuit(circuitInput: Record<string, unknown>): Promise<Result<ProofBytes, string>> {
   try {
     const { proof } = await groth16.fullProve(circuitInput, CIRCUIT_WASM_URL, CIRCUIT_ZKEY_URL)
     return { ok: true, value: packProof(proof) }
@@ -102,32 +88,8 @@ export async function proveCircuit(
 }
 
 // ---------------------------------------------------------------------------
-// Decrypt + selection + whitelist (sourceRef: operator-decrypt.js, helpers.js)
+// Selection + whitelist (sourceRef: circuits/test/helpers.js)
 // ---------------------------------------------------------------------------
-
-function decryptBid(
-  encryptedBid: Uint8Array,
-  operatorSecretKey: Uint8Array,
-): { price: bigint; salt: bigint } | null {
-  const minimumLength = NONCE_BYTES + EPHEMERAL_PUB_BYTES + PRICE_BYTES + SALT_BYTES
-  if (encryptedBid.length < minimumLength) {
-    return null
-  }
-  const nonce = encryptedBid.subarray(0, NONCE_BYTES)
-  const ephemeralPublicKey = encryptedBid.subarray(NONCE_BYTES, NONCE_BYTES + EPHEMERAL_PUB_BYTES)
-  const boxBytes = encryptedBid.subarray(NONCE_BYTES + EPHEMERAL_PUB_BYTES)
-  const opened = nacl.box.open(boxBytes, nonce, ephemeralPublicKey, operatorSecretKey)
-  if (!opened || opened.length !== PRICE_BYTES + SALT_BYTES) {
-    return null
-  }
-  const view = new DataView(opened.buffer, opened.byteOffset, opened.byteLength)
-  const price = view.getBigUint64(0, false)
-  let salt = 0n
-  for (let byteIndex = PRICE_BYTES; byteIndex < opened.length; byteIndex += 1) {
-    salt = (salt << 8n) | BigInt(opened[byteIndex])
-  }
-  return { price, salt }
-}
 
 // Winner holds the maximum price (lowest slot on ties via strict >); the public
 // clearing price is the highest price among the other slots (second price).
@@ -205,82 +167,42 @@ class PoseidonMerkleTree {
 }
 
 // ---------------------------------------------------------------------------
-// Session parsing + the full pipeline
+// The pipeline: revealed bids -> proof bundle
 // ---------------------------------------------------------------------------
 
-export function parseOperatorSession(rawText: string): Result<OperatorSession, string> {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(rawText)
-  } catch {
-    return { ok: false, error: 'That is not valid JSON. Load the operator session file.' }
-  }
-  if (typeof parsed !== 'object' || parsed === null) {
-    return { ok: false, error: 'The operator session must be a JSON object.' }
-  }
-  const record = parsed as Record<string, unknown>
-  if (typeof record.secretKeyHex !== 'string' || !/^[0-9a-fA-F]{64}$/.test(record.secretKeyHex)) {
-    return { ok: false, error: 'The session is missing a valid 32-byte secretKeyHex.' }
-  }
-  const whitelist = record.whitelist as { members?: unknown } | undefined
-  if (!whitelist || !Array.isArray(whitelist.members) || whitelist.members.length === 0) {
-    return { ok: false, error: 'The session is missing whitelist members.' }
-  }
-  const members: { address: string }[] = []
-  for (const rawMember of whitelist.members) {
-    const address = (rawMember as { address?: unknown }).address
-    if (typeof address !== 'string') {
-      return { ok: false, error: 'A whitelist member is missing an address.' }
-    }
-    members.push({ address })
-  }
-  return { ok: true, value: { secretKeyHex: record.secretKeyHex, whitelist: { members } } }
+// Bids laid out by slot index (empty slots stay zero / undefined bidder).
+type SlotData = {
+  prices: bigint[]
+  salts: bigint[]
+  commitments: bigint[]
+  bidders: (string | undefined)[]
 }
 
-export async function generateSettleBundle(
+// Shared tail: verify commitments, pick the winner, rebuild the Merkle path, and
+// prove. Used by the reveal flow; kept separate so the decryption source (server
+// or, in future, elsewhere) does not duplicate the proving logic.
+async function assembleAndProve(
   auction: AuctionView,
-  session: OperatorSession,
+  slots: SlotData,
+  whitelistMembers: readonly string[],
   onPhase: (phase: OperatorPhase, detail?: string) => void,
 ): Promise<Result<SettleBundle, string>> {
-  onPhase('fetching')
-  const eventsResult = await fetchBidEvents(auction.id)
-  if (!eventsResult.ok) {
-    return { ok: false, error: 'Could not fetch the sealed bids from chain. Retry.' }
-  }
-  const bidEvents = eventsResult.value
-  if (bidEvents.length === 0) {
-    return { ok: false, error: 'No sealed bids found on chain for this auction.' }
-  }
-
-  const operatorSecretKey = hexToBytes(session.secretKeyHex)
   const hash = await getPoseidonHasher()
   const auctionIdBig = BigInt(auction.id)
 
-  onPhase('decrypting', String(bidEvents.length))
-  const slotPrices: bigint[] = Array.from({ length: MAX_BID_SLOTS }, () => 0n)
-  const slotSalts: bigint[] = Array.from({ length: MAX_BID_SLOTS }, () => 0n)
-  const slotCommitments: bigint[] = Array.from({ length: MAX_BID_SLOTS }, () => 0n)
-  const slotBidders: (string | undefined)[] = Array.from({ length: MAX_BID_SLOTS }, () => undefined)
-  for (const bidEvent of bidEvents) {
-    const opened = decryptBid(bidEvent.encryptedBid, operatorSecretKey)
-    if (!opened) {
-      return { ok: false, error: `Slot ${bidEvent.slotIndex}: could not decrypt (wrong operator key?).` }
+  // Each filled slot's revealed bid must match its on-chain commitment.
+  for (let slotIndex = 0; slotIndex < MAX_BID_SLOTS; slotIndex += 1) {
+    if (slots.bidders[slotIndex] === undefined) {
+      continue
     }
-    const recomputedCommitment = hash([opened.price, opened.salt, auctionIdBig])
-    if (recomputedCommitment !== bidEvent.commitment) {
-      return {
-        ok: false,
-        error: `Slot ${bidEvent.slotIndex}: decrypted bid does not match its on-chain commitment.`,
-      }
+    const recomputed = hash([slots.prices[slotIndex], slots.salts[slotIndex], auctionIdBig])
+    if (recomputed !== slots.commitments[slotIndex]) {
+      return { ok: false, error: `Slot ${slotIndex}: the revealed bid does not match its on-chain commitment.` }
     }
-    slotPrices[bidEvent.slotIndex] = opened.price
-    slotSalts[bidEvent.slotIndex] = opened.salt
-    slotCommitments[bidEvent.slotIndex] = bidEvent.commitment
-    slotBidders[bidEvent.slotIndex] = bidEvent.bidder
   }
 
   onPhase('building')
-  const outcome = selectVickreyOutcome(slotPrices)
+  const outcome = selectVickreyOutcome(slots.prices)
   if (outcome.winnerIndex < 0 || outcome.winnerPrice <= 0n) {
     return { ok: false, error: 'No positive-price bid; there is nothing to settle.' }
   }
@@ -291,15 +213,15 @@ export async function generateSettleBundle(
     }
   }
   const winnerIndex = outcome.winnerIndex
-  const winnerAddress = slotBidders[winnerIndex]
+  const winnerAddress = slots.bidders[winnerIndex]
   if (winnerAddress === undefined) {
     return { ok: false, error: 'Internal error: the winning slot has no bidder.' }
   }
 
   const memberLeaves: bigint[] = []
   let winnerMemberIndex = -1
-  for (let memberIndex = 0; memberIndex < session.whitelist.members.length; memberIndex += 1) {
-    const memberAddress = session.whitelist.members[memberIndex].address
+  for (let memberIndex = 0; memberIndex < whitelistMembers.length; memberIndex += 1) {
+    const memberAddress = whitelistMembers[memberIndex]
     let keyBytes: Uint8Array
     try {
       keyBytes = StrKey.decodeEd25519PublicKey(memberAddress)
@@ -316,22 +238,19 @@ export async function generateSettleBundle(
   }
   const tree = new PoseidonMerkleTree(hash, MERKLE_DEPTH, memberLeaves)
   if (tree.root !== auction.whitelistRoot) {
-    return {
-      ok: false,
-      error: 'The whitelist does not rebuild to the auction on-chain root. Wrong whitelist file?',
-    }
+    return { ok: false, error: 'The whitelist does not rebuild to the auction on-chain root.' }
   }
   const winnerPath = tree.pathFor(winnerMemberIndex)
 
   const circuitInput = {
     auctionId: auctionIdBig.toString(),
-    commitments: slotCommitments.map((commitment) => commitment.toString()),
+    commitments: slots.commitments.map((commitment) => commitment.toString()),
     winnerIndex: winnerIndex.toString(),
     winningPrice: outcome.clearingPrice.toString(),
     whitelistRoot: auction.whitelistRoot.toString(),
     winnerAddrHash: memberLeaves[winnerMemberIndex].toString(),
-    bidPrices: slotPrices.map((price) => price.toString()),
-    bidSalts: slotSalts.map((salt) => salt.toString()),
+    bidPrices: slots.prices.map((price) => price.toString()),
+    bidSalts: slots.salts.map((salt) => salt.toString()),
     merklePathElements: winnerPath.elements.map((element) => element.toString()),
     merklePathIndexBits: winnerPath.indexBits.map((indexBit) => indexBit.toString()),
   }
@@ -353,4 +272,43 @@ export async function generateSettleBundle(
       proof: proofResult.value,
     },
   }
+}
+
+// Turns the server-decrypted bids into a signed-settle-ready bundle. The box
+// secret is never needed here; decryption already happened in /api/reveal.
+export async function proveSettleFromRevealedBids(
+  auction: AuctionView,
+  revealedBids: RevealedBid[],
+  whitelistMembers: readonly string[],
+  onPhase: (phase: OperatorPhase, detail?: string) => void,
+): Promise<Result<SettleBundle, string>> {
+  if (revealedBids.length === 0) {
+    return { ok: false, error: 'No sealed bids were revealed for this auction.' }
+  }
+  const slots: SlotData = {
+    prices: Array.from({ length: MAX_BID_SLOTS }, () => 0n),
+    salts: Array.from({ length: MAX_BID_SLOTS }, () => 0n),
+    commitments: Array.from({ length: MAX_BID_SLOTS }, () => 0n),
+    bidders: Array.from({ length: MAX_BID_SLOTS }, () => undefined),
+  }
+  for (const bid of revealedBids) {
+    if (bid.slotIndex < 0 || bid.slotIndex >= MAX_BID_SLOTS) {
+      return { ok: false, error: `A revealed bid has an out-of-range slot (${bid.slotIndex}).` }
+    }
+    let price: bigint
+    let salt: bigint
+    let commitment: bigint
+    try {
+      price = BigInt(bid.price)
+      salt = BigInt(bid.salt)
+      commitment = BigInt(bid.commitment)
+    } catch {
+      return { ok: false, error: 'A revealed bid has a non-numeric field.' }
+    }
+    slots.prices[bid.slotIndex] = price
+    slots.salts[bid.slotIndex] = salt
+    slots.commitments[bid.slotIndex] = commitment
+    slots.bidders[bid.slotIndex] = bid.bidder
+  }
+  return assembleAndProve(auction, slots, whitelistMembers, onPhase)
 }

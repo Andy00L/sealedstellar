@@ -21,7 +21,6 @@ import { RpcDownNotice } from '@/components/auction/RpcDownNotice'
 import { SettlementSummary } from '@/components/auction/SettlementSummary'
 import { Button } from '@/components/ui/button'
 import { useAuctionRoom } from '@/hooks/useAuctionRoom'
-import { requestAutoSettle } from '@/lib/autosettle'
 import { useNowSeconds } from '@/hooks/useNowSeconds'
 import { useSettlementInfo } from '@/hooks/useSettlementInfo'
 import { useWallet } from '@/hooks/useWallet'
@@ -103,11 +102,6 @@ function AuctionRoomBody({
   const [unsealStage, setUnsealStage] = useState<number>(() => (tone === 'settled' ? 4 : 0))
   const justSettledRef = useRef(false)
   const unsealTimers = useRef<number[]>([])
-  // Fire the auto-settle once per room; the latest refresh callback is read
-  // from a ref so the effect does not re-run (and abort its fetch) on identity.
-  const autoSettleTriggeredRef = useRef(false)
-  const refreshNowRef = useRef(refreshNow)
-  refreshNowRef.current = refreshNow
 
   const clearUnsealTimers = () => {
     unsealTimers.current.forEach((timerId) => clearTimeout(timerId))
@@ -131,28 +125,6 @@ function AuctionRoomBody({
       setUnsealStage(4)
     }
   }, [tone, unsealStage])
-
-  // external system: the server-side auto-settler (web/api/settle.ts). Once the
-  // bid window has closed and the auction is not yet settled, ask the backend to
-  // decrypt, prove, and settle it, then refresh so the unseal reveals. Fired
-  // once per room; the manual OperatorStepper stays as the fallback if the
-  // backend cannot settle (for example when its operator secret is unset).
-  useEffect(() => {
-    if (tone !== 'awaiting' || autoSettleTriggeredRef.current) {
-      return
-    }
-    autoSettleTriggeredRef.current = true
-    const abortController = new AbortController()
-    void requestAutoSettle(auction.id, abortController.signal).then((autoSettleResult) => {
-      if (abortController.signal.aborted) {
-        return
-      }
-      if (autoSettleResult.kind === 'settled' || autoSettleResult.kind === 'already_settled') {
-        refreshNowRef.current()
-      }
-    })
-    return () => abortController.abort()
-  }, [tone, auction.id])
 
   const handleSettled = (result: SettleResult) => {
     justSettledRef.current = true

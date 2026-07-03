@@ -1,19 +1,19 @@
-// Operator settlement flow. The proof is generated in the browser: the
-// operator loads their session (box key + whitelist, client-side only), the UI
-// fetches the sealed bids, decrypts them, builds the circuit input, runs the
-// Groth16 prover with snarkjs, and performs the real Freighter-signed settle.
-// The contract cannot pay out without a valid proof, so secrecy and
-// trustlessness hold together. A CLI-generated proof can be pasted as a
-// fallback if browser proving stalls.
-// sourceRef: design-handoff/hackathon-ui-with-glass-effects/project/
-// SealedStellar.dc.html operator stepper.
+// Operator settlement flow, one button. "Reveal the winner" asks /api/reveal to
+// decrypt the sealed bids server-side (the operator box secret stays on the
+// server, no session file to load), then the browser rebuilds the whitelist
+// path and runs the Groth16 prover with snarkjs, and the operator signs the real
+// settle in their wallet. The contract cannot pay out without a valid proof, so
+// secrecy and trustlessness hold. A CLI-generated proof can still be pasted if
+// browser proving stalls.
+// sourceRef: web/src/lib/reveal.ts, web/src/lib/operator.ts, web/api/reveal.ts.
 
-import { useState, type ChangeEvent, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { useWallet } from '@/hooks/useWallet'
 import { walletKit } from '@/lib/wallet-kit'
+import { DEMO_WHITELIST_MEMBERS } from '@/lib/demo-whitelist'
 import { NETWORK_PASSPHRASE } from '@/config'
 import {
   parseSettleBundle,
@@ -21,12 +21,8 @@ import {
   type SettleBundle,
   type WalletSigner,
 } from '@/lib/transactions'
-import {
-  generateSettleBundle,
-  parseOperatorSession,
-  type OperatorPhase,
-  type OperatorSession,
-} from '@/lib/operator'
+import { proveSettleFromRevealedBids, type OperatorPhase } from '@/lib/operator'
+import { requestReveal } from '@/lib/reveal'
 import { describeSettleFailure, type SettleFailure } from '@/lib/errors'
 import { formatTokenAmount, truncateAddress } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -47,7 +43,7 @@ type OperatorStepperProps = {
 
 type NodeState = 'pending' | 'active' | 'done' | 'error'
 
-// Phase -> progress percent and label for the in-browser prover.
+// Phase -> progress percent and label for the reveal + in-browser prover.
 const PHASE_PERCENT: Record<OperatorPhase, number> = {
   fetching: 15,
   decrypting: 40,
@@ -56,8 +52,8 @@ const PHASE_PERCENT: Record<OperatorPhase, number> = {
   done: 100,
 }
 const PHASE_LABEL: Record<OperatorPhase, string> = {
-  fetching: 'Fetching the sealed bids from chain…',
-  decrypting: 'Decrypting bids and verifying commitments…',
+  fetching: 'Revealing the sealed bids…',
+  decrypting: 'Checking the revealed bids…',
   building: 'Building the circuit input…',
   proving: 'Generating the Groth16 proof…',
   done: 'Proof ready',
@@ -65,11 +61,10 @@ const PHASE_LABEL: Record<OperatorPhase, string> = {
 
 export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorStepperProps) {
   const { wallet, connectWallet } = useWallet()
-  const [session, setSession] = useState<OperatorSession | null>(null)
-  const [sessionError, setSessionError] = useState<string | null>(null)
   const [provePhase, setProvePhase] = useState<OperatorPhase | null>(null)
   const [provePercent, setProvePercent] = useState(0)
   const [proveError, setProveError] = useState<string | null>(null)
+  const [alreadySettled, setAlreadySettled] = useState(false)
   const [bundle, setBundle] = useState<SettleBundle | null>(null)
   const [showPaste, setShowPaste] = useState(false)
   const [pasteText, setPasteText] = useState('')
@@ -77,36 +72,41 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
   const [settlePhase, setSettlePhase] = useState<'idle' | 'settling' | 'failed'>('idle')
   const [settleError, setSettleError] = useState<SettleFailure | null>(null)
 
-  const isProving = provePhase !== null && bundle === null
+  const isRevealing = provePhase !== null && bundle === null
 
-  const handleSessionFile = async (changeEvent: ChangeEvent<HTMLInputElement>) => {
-    const file = changeEvent.target.files?.[0]
-    changeEvent.target.value = '' // allow re-selecting the same file
-    if (!file) {
-      return
-    }
-    const parsed = parseOperatorSession(await file.text())
-    if (!parsed.ok) {
-      setSession(null)
-      setSessionError(parsed.error)
-      return
-    }
-    setSessionError(null)
-    setSession(parsed.value)
-  }
-
-  const runGenerateProof = async () => {
-    if (!session) {
-      return
-    }
+  const runReveal = async () => {
     setProveError(null)
+    setAlreadySettled(false)
     setBundle(null)
     setProvePhase('fetching')
     setProvePercent(PHASE_PERCENT.fetching)
-    const result = await generateSettleBundle(auction, session, (phase) => {
-      setProvePhase(phase)
-      setProvePercent(PHASE_PERCENT[phase])
-    })
+
+    const revealed = await requestReveal(auction.id)
+    if (!revealed.ok) {
+      setProveError(revealed.error)
+      setProvePhase(null)
+      setProvePercent(0)
+      return
+    }
+    if (revealed.value.kind === 'already_settled') {
+      // Someone settled it first; the room's polling reveals the result shortly.
+      setAlreadySettled(true)
+      setProvePhase(null)
+      setProvePercent(0)
+      return
+    }
+
+    setProvePhase('decrypting')
+    setProvePercent(PHASE_PERCENT.decrypting)
+    const result = await proveSettleFromRevealedBids(
+      auction,
+      revealed.value.bids,
+      DEMO_WHITELIST_MEMBERS,
+      (phase) => {
+        setProvePhase(phase)
+        setProvePercent(PHASE_PERCENT[phase])
+      },
+    )
     if (!result.ok) {
       setProveError(result.error)
       setProvePhase(null)
@@ -166,14 +166,7 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
   }
 
   const isSettling = settlePhase === 'settling'
-  const decryptState: NodeState = session ? 'done' : 'active'
-  const proveState: NodeState = proveError
-    ? 'error'
-    : bundle
-      ? 'done'
-      : isProving || session
-        ? 'active'
-        : 'pending'
+  const revealState: NodeState = proveError ? 'error' : bundle ? 'done' : 'active'
   const settleState: NodeState = settlePhase === 'failed' ? 'error' : bundle ? 'active' : 'pending'
 
   return (
@@ -185,32 +178,11 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
         </span>
       </div>
 
-      <StepRow state={decryptState} title="Load your operator session">
+      <StepRow state={revealState} title="Reveal the winner">
         <p className="text-[12.5px] text-muted-foreground">
-          The box key and whitelist for {filledSlots} sealed bids. Loaded into this tab only, to
-          decrypt and prove locally.
+          Decrypts the {filledSlots} sealed bids on the server, then builds the Groth16 proof in
+          your browser. No file to load.
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <label className="inline-flex cursor-pointer items-center rounded-[11px] border border-border bg-white/60 px-4 py-2 text-[13px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,.8)] hover:bg-white/80">
-            <input
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={(changeEvent) => void handleSessionFile(changeEvent)}
-            />
-            {session ? 'Re-load session' : 'Load operator session'}
-          </label>
-          {session && (
-            <span className="text-[12.5px] text-muted-foreground">
-              Loaded ({session.whitelist.members.length} whitelist members).
-            </span>
-          )}
-        </div>
-        {sessionError && <FieldError message={sessionError} />}
-      </StepRow>
-
-      <StepRow state={proveState} title="Generate the zero-knowledge proof">
-        <p className="text-[12.5px] text-muted-foreground">Groth16 · in your browser</p>
 
         {provePhase && (
           <div className="mt-3.5">
@@ -224,9 +196,7 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
               <span className="font-mono text-[11.5px] text-muted-foreground">
                 {PHASE_LABEL[provePhase]}
               </span>
-              <span className="font-mono text-[11.5px] text-primary">
-                {Math.round(provePercent)}%
-              </span>
+              <span className="font-mono text-[11.5px] text-primary">{Math.round(provePercent)}%</span>
             </div>
           </div>
         )}
@@ -241,11 +211,16 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
           </p>
         )}
         {proveError && <FieldError message={proveError} />}
+        {alreadySettled && (
+          <p className="mt-2 text-[12.5px] text-muted-foreground">
+            This auction is already settled. The result will appear in a moment.
+          </p>
+        )}
 
         {!bundle && (
           <div className="mt-3">
-            <Button variant="cta" disabled={!session || isProving} onClick={() => void runGenerateProof()}>
-              {isProving ? 'Proving…' : 'Generate proof'}
+            <Button variant="cta" disabled={isRevealing} onClick={() => void runReveal()}>
+              {isRevealing ? 'Revealing…' : 'Reveal the winner'}
             </Button>
           </div>
         )}
