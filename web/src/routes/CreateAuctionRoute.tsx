@@ -15,6 +15,10 @@ import {
   type SegmentedOption,
 } from '@/components/auction/GlassSegmentedControl'
 import { BidErrorNotice } from '@/components/auction/BidErrorNotice'
+import {
+  TokenPickerDialog,
+  type TokenPickerState,
+} from '@/components/auction/TokenPickerDialog'
 import { useWallet } from '@/hooks/useWallet'
 import { walletKit } from '@/lib/wallet-kit'
 import {
@@ -23,6 +27,11 @@ import {
   type WalletSigner,
 } from '@/lib/transactions'
 import { describeCreateAuctionFailure, type CreateAuctionFailure } from '@/lib/errors'
+import {
+  describeWalletAssetsError,
+  loadWalletAssets,
+  type WalletAsset,
+} from '@/lib/wallet-assets'
 import { truncateHex } from '@/lib/format'
 import {
   DEMO_OPERATOR_ENC_PUBKEY_HEX,
@@ -38,20 +47,28 @@ const MAX_U64 = 18446744073709551615n
 const SECONDS_PER_MINUTE = 60
 const SECONDS_PER_HOUR = 3600
 
-const TOKEN_OPTIONS: readonly SegmentedOption<string>[] = KNOWN_TOKENS.map((token) => ({
-  value: token.contractId,
-  label: token.symbol,
-}))
+// The asset selectors offer the demo tokens plus any token the seller added from
+// their wallet, deduped by contract id. sourceRef: config KNOWN_TOKENS.
+function buildTokenOptions(customTokens: readonly WalletAsset[]): SegmentedOption<string>[] {
+  const options: SegmentedOption<string>[] = KNOWN_TOKENS.map((token) => ({
+    value: token.contractId,
+    label: token.symbol,
+  }))
+  const seenContractIds = new Set(options.map((option) => option.value))
+  for (const token of customTokens) {
+    if (!seenContractIds.has(token.contractId)) {
+      seenContractIds.add(token.contractId)
+      options.push({ value: token.contractId, label: token.symbol })
+    }
+  }
+  return options
+}
 
 type CreateStage =
   | { stage: 'form'; validationMessage?: string }
   | { stage: 'submitting' }
   | { stage: 'created'; txHash: string }
   | { stage: 'failed'; failure: CreateAuctionFailure }
-
-function symbolForContractId(contractId: string): string {
-  return KNOWN_TOKENS.find((token) => token.contractId === contractId)?.symbol ?? 'token'
-}
 
 function hexToBytes32(hexText: string): Uint8Array {
   const bytes = new Uint8Array(32)
@@ -98,6 +115,45 @@ export function CreateAuctionRoute() {
   const [maxPriceText, setMaxPriceText] = useState('50000')
   const [windowMinutesText, setWindowMinutesText] = useState('30')
   const [graceHoursText, setGraceHoursText] = useState('24')
+  const [customTokens, setCustomTokens] = useState<WalletAsset[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerTarget, setPickerTarget] = useState<'lot' | 'payment'>('lot')
+  const [pickerState, setPickerState] = useState<TokenPickerState>({ phase: 'loading' })
+
+  const tokenOptions = buildTokenOptions(customTokens)
+  const symbolOf = (contractId: string): string =>
+    tokenOptions.find((option) => option.value === contractId)?.label ?? 'token'
+
+  // Opening the picker loads the wallet's tokens in this click handler (not an
+  // effect), so the dialog stays presentational. sourceRef: lib/wallet-assets.
+  const openTokenPicker = async (target: 'lot' | 'payment') => {
+    if (wallet.status !== 'connected') {
+      return
+    }
+    setPickerTarget(target)
+    setPickerState({ phase: 'loading' })
+    setPickerOpen(true)
+    const loaded = await loadWalletAssets(wallet.address)
+    if (!loaded.ok) {
+      setPickerState({ phase: 'error', message: describeWalletAssetsError(loaded.error) })
+      return
+    }
+    setPickerState({ phase: 'ready', assets: loaded.value })
+  }
+
+  const addAndSelectToken = (token: WalletAsset) => {
+    setCustomTokens((current) =>
+      current.some((existing) => existing.contractId === token.contractId)
+        ? current
+        : [...current, token],
+    )
+    if (pickerTarget === 'lot') {
+      setLotTokenId(token.contractId)
+    } else {
+      setPaymentTokenId(token.contractId)
+    }
+    setPickerOpen(false)
+  }
 
   const runCreate = async () => {
     if (wallet.status !== 'connected') {
@@ -208,15 +264,18 @@ export function CreateAuctionRoute() {
           </div>
         ) : (
           <div className="glass-panel grid gap-5 rounded-[22px] p-6">
-            <FormField label="Lot asset">
-              <GlassSegmentedControl
-                ariaLabel="Lot asset"
-                options={TOKEN_OPTIONS}
-                value={lotTokenId}
-                onChange={setLotTokenId}
-              />
-            </FormField>
-            <FormField label={`Lot amount (${symbolForContractId(lotTokenId)})`}>
+            <div className="grid gap-2">
+              <FormField label="Lot asset">
+                <GlassSegmentedControl
+                  ariaLabel="Lot asset"
+                  options={tokenOptions}
+                  value={lotTokenId}
+                  onChange={setLotTokenId}
+                />
+              </FormField>
+              <AddTokenButton onClick={() => void openTokenPicker('lot')} />
+            </div>
+            <FormField label={`Lot amount (${symbolOf(lotTokenId)})`}>
               <Input
                 type="text"
                 inputMode="numeric"
@@ -227,15 +286,18 @@ export function CreateAuctionRoute() {
                 className="rounded-[12px] border-border bg-white/65 font-mono"
               />
             </FormField>
-            <FormField label="Payment asset">
-              <GlassSegmentedControl
-                ariaLabel="Payment asset"
-                options={TOKEN_OPTIONS}
-                value={paymentTokenId}
-                onChange={setPaymentTokenId}
-              />
-            </FormField>
-            <FormField label={`Max price (${symbolForContractId(paymentTokenId)})`}>
+            <div className="grid gap-2">
+              <FormField label="Payment asset">
+                <GlassSegmentedControl
+                  ariaLabel="Payment asset"
+                  options={tokenOptions}
+                  value={paymentTokenId}
+                  onChange={setPaymentTokenId}
+                />
+              </FormField>
+              <AddTokenButton onClick={() => void openTokenPicker('payment')} />
+            </div>
+            <FormField label={`Max price (${symbolOf(paymentTokenId)})`}>
               <Input
                 type="text"
                 inputMode="numeric"
@@ -297,6 +359,15 @@ export function CreateAuctionRoute() {
                 {createStage.stage === 'submitting' ? 'Creating…' : 'Create auction'}
               </Button>
             </div>
+
+            <TokenPickerDialog
+              open={pickerOpen}
+              state={pickerState}
+              existingContractIds={customTokens.map((token) => token.contractId)}
+              onRetry={() => void openTokenPicker(pickerTarget)}
+              onPick={addAndSelectToken}
+              onClose={() => setPickerOpen(false)}
+            />
           </div>
         )}
       </div>
@@ -310,5 +381,17 @@ function FormField({ label, children }: { label: string; children: ReactNode }) 
       <span className="text-[10.5px] uppercase tracking-[0.14em] text-ink-faint">{label}</span>
       {children}
     </label>
+  )
+}
+
+function AddTokenButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="justify-self-start text-[12px] font-medium text-primary transition hover:underline"
+    >
+      + Add a token from your wallet
+    </button>
   )
 }
