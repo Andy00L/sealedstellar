@@ -13,6 +13,7 @@ import { Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useWallet } from '@/hooks/useWallet'
 import { walletKit } from '@/lib/wallet-kit'
+import { DEMO_WHITELIST_MEMBERS } from '@/lib/demo-whitelist'
 import { NETWORK_PASSPHRASE } from '@/config'
 import {
   parseSettleBundle,
@@ -97,10 +98,14 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
 
     setProvePhase('decrypting')
     setProvePercent(PHASE_PERCENT.decrypting)
+    // The reveal returns registry members for a custom whitelist, or an empty
+    // list for demo and CLI auctions; fall back to the built-in demo set here.
+    const whitelistMembers =
+      revealed.value.members.length > 0 ? revealed.value.members : DEMO_WHITELIST_MEMBERS
     const result = await proveSettleFromRevealedBids(
       auction,
       revealed.value.bids,
-      revealed.value.members,
+      whitelistMembers,
       (phase) => {
         setProvePhase(phase)
         setProvePercent(PHASE_PERCENT[phase])

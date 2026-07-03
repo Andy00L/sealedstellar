@@ -17,10 +17,6 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { Account, Contract, TransactionBuilder, nativeToScVal, scValToNative, rpc, xdr } from '@stellar/stellar-sdk'
 import nacl from 'tweetnacl'
 
-// Fallback member list for auctions with no registry entry (the demo whitelist
-// and CLI-staged auctions). sourceRef: web/src/lib/demo-whitelist.ts.
-import { DEMO_WHITELIST_MEMBERS } from '../src/lib/demo-whitelist'
-
 // --- Standing network + contract (sourceRef: web/src/config.ts) --------------
 const RPC_URL = process.env.SETTLE_RPC_URL ?? 'https://soroban-testnet.stellar.org'
 const NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015'
@@ -360,10 +356,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     })
   }
 
-  const registryMembers = await getRegistryMembers(auctionState.whitelistRoot)
-  const members = registryMembers.length > 0 ? registryMembers : [...DEMO_WHITELIST_MEMBERS]
+  // Registry members for a custom whitelist, or empty for demo and CLI auctions.
+  // The browser falls back to its built-in demo whitelist when this is empty. The
+  // api function must NOT import from ../src: Vercel fails to bundle that
+  // cross-directory import and the function then crashes at load.
+  const members = await getRegistryMembers(auctionState.whitelistRoot)
 
-  console.log(`[reveal] auction ${auctionId}: ${bids.length} bids, ${members.length} whitelist members`)
+  console.log(`[reveal] auction ${auctionId}: ${bids.length} bids, ${members.length} registry members`)
   res.status(200).json({
     ok: true,
     auctionId,
