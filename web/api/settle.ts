@@ -7,9 +7,13 @@
 // rebuild the whitelist Merkle path, generate the Groth16 proof with snarkjs,
 // pack it to the Soroban byte layout, then sign and send the settle with a
 // funded settler key. The two secrets stay server-side (non-VITE env vars, so
-// never in the bundle) exactly like the faucet's ISSUER_SECRET. TESTNET ONLY.
+// never in the bundle) exactly like the faucet's ISSUER_SECRET. The KYC whitelist
+// is NOT an env var: its members come from the shared in-app module
+// src/lib/demo-whitelist, so this settler needs no operator to configure the
+// allowlist. TESTNET ONLY.
 // sourceRef: web/src/lib/operator.ts, web/src/lib/transactions.ts submitSettle,
-// web/src/lib/chain.ts fetchBidEvents/getAuction, web/api/faucet.ts.
+// web/src/lib/chain.ts fetchBidEvents/getAuction, web/api/faucet.ts,
+// web/src/lib/demo-whitelist.ts.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import {
@@ -26,6 +30,10 @@ import {
 import { groth16, type Groth16Proof } from 'snarkjs'
 import nacl from 'tweetnacl'
 import { buildPoseidon } from 'circomlibjs'
+
+// The demo KYC whitelist members (public account ids) live in the app, not an env
+// var, so no operator has to configure the allowlist. sourceRef: src/lib/demo-whitelist.
+import { DEMO_WHITELIST_MEMBERS } from '../src/lib/demo-whitelist'
 
 // Proving fetches a ~5.4MB zkey and runs the witness generator; 60s is the
 // Hobby cap and is comfortable for this small circuit.
@@ -125,20 +133,16 @@ function loadSettleConfig(): SettleConfig | SettleError {
   } catch {
     return { kind: 'server_misconfigured', message: 'SETTLER_SECRET is not a valid secret seed' }
   }
-  const whitelistRaw = process.env.OPERATOR_WHITELIST
-  if (whitelistRaw === undefined || whitelistRaw.trim() === '') {
-    return { kind: 'server_misconfigured', message: 'OPERATOR_WHITELIST is missing (comma-separated G addresses)' }
-  }
-  const whitelistMembers = whitelistRaw
-    .split(',')
-    .map((memberAddress) => memberAddress.trim())
-    .filter((memberAddress) => memberAddress.length > 0)
+  // The KYC whitelist is app-owned public data (src/lib/demo-whitelist), not
+  // operator env config. Validate the shared constant here so a bad edit fails
+  // loudly at load, not as a 500 mid-proof.
+  const whitelistMembers = [...DEMO_WHITELIST_MEMBERS]
   if (whitelistMembers.length === 0) {
-    return { kind: 'server_misconfigured', message: 'OPERATOR_WHITELIST has no members' }
+    return { kind: 'server_misconfigured', message: 'the in-app demo whitelist is empty' }
   }
   for (const memberAddress of whitelistMembers) {
     if (!StrKey.isValidEd25519PublicKey(memberAddress)) {
-      return { kind: 'server_misconfigured', message: 'OPERATOR_WHITELIST holds an invalid G address' }
+      return { kind: 'server_misconfigured', message: 'the in-app demo whitelist holds an invalid G address' }
     }
   }
   return {

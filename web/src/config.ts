@@ -28,17 +28,19 @@ export const MAX_BID_SLOTS = 8
 // so one poll per ledger is the natural rhythm.
 export const POLL_INTERVAL_MS = 5000
 
-// Standing demo operator and KYC whitelist (public values) used as defaults
-// when a seller creates an auction from the UI, so that auction is settleable
-// by the demo operator and gates on the demo whitelist. The operator box
-// PUBLIC key and the Merkle root are public; the operator secret key and the
-// whitelist member addresses stay off-app (the gitignored secrets/ directory).
-// sourceRef: docs/DECISIONS.md (2026-06-12 operator key + whitelist entry) and
-// secrets/operator-box-key.json publicKeyHex / secrets/whitelist-demo.json.
+// Standing demo operator and KYC whitelist (public values) used as defaults when
+// a seller creates an auction from the UI, so that auction is settleable by the
+// demo operator and gates on the demo whitelist. Every value here is public: the
+// operator box PUBLIC key, the Merkle root, and (in ./lib/demo-whitelist) the member
+// account ids. Only the operator box SECRET key and the settler seed stay off-app
+// (server-side env in web/api/settle.ts, and the gitignored secrets/ directory).
+// sourceRef: docs/DECISIONS.md (2026-06-12 operator key + whitelist entry),
+// secrets/operator-box-key.json publicKeyHex, and ./lib/demo-whitelist.
 export const DEMO_OPERATOR_ENC_PUBKEY_HEX =
   'e2b45dd934b5429480a66d52b2c450df53b045ce4a89945a3e4f9bb121620806'
-export const DEMO_WHITELIST_ROOT_DECIMAL =
-  '5172224275804351315414901861729184676010438551683667636100386119102665402371'
+// The whitelist root travels with its member list in one shared, dependency-free
+// module so the app and the same-origin auto-settler read a single source.
+export { DEMO_WHITELIST_ROOT_DECIMAL } from './lib/demo-whitelist'
 
 // The demo Stellar Asset Contract tokens a seller can auction or accept as
 // payment. sourceRef: docs/MOCKS.md (tBENJI / tUSDC SAC ids).
