@@ -16,6 +16,11 @@ design-handoff/
 
 # Internal UI design-system handoff (kept local, not distributed with the repo).
 docs/UI_DESIGN_SYSTEM.md
+
+# Claude working standards and playbooks (local tooling, not part of the
+# distributed code; the repo ships just the product).
+.claude/
+docs/DESIGN_AND_MOTION_PLAYBOOK.md
 contracts/target/
 target/
 node_modules/
@@ -34,3 +39,4 @@ secrets/
 
 # Windows-side metadata that WSL file copies pick up
 *Zone.Identifier
+SEALEDSTELLAR_BUILD_PLAN.md
