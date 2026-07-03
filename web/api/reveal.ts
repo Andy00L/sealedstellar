@@ -17,11 +17,18 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { Account, Contract, TransactionBuilder, nativeToScVal, scValToNative, rpc, xdr } from '@stellar/stellar-sdk'
 import nacl from 'tweetnacl'
 
+// Fallback member list for auctions with no registry entry (the demo whitelist
+// and CLI-staged auctions). sourceRef: web/src/lib/demo-whitelist.ts.
+import { DEMO_WHITELIST_MEMBERS } from '../src/lib/demo-whitelist'
+
 // --- Standing network + contract (sourceRef: web/src/config.ts) --------------
 const RPC_URL = process.env.SETTLE_RPC_URL ?? 'https://soroban-testnet.stellar.org'
 const NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015'
 const AUCTION_CONTRACT_ID =
   process.env.AUCTION_CONTRACT_ID ?? 'CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4'
+// Whitelist registry: members behind a custom whitelist root. sourceRef: config.ts.
+const WHITELIST_REGISTRY_CONTRACT_ID =
+  process.env.WHITELIST_REGISTRY_CONTRACT_ID ?? 'CCMBTTSEHZJ2VCREYTR36QZAAHR43D24IDEHPCMXR66B6HNFCAUXNNWA'
 
 // Frozen ciphertext layout. sourceRef: prover/make-bid.js, operator.ts.
 const NONCE_BYTES = 24
@@ -162,6 +169,35 @@ async function getAuctionState(auctionId: number): Promise<AuctionState | Reveal
     status: statusText,
     commitDeadlineSeconds: Number(record.commit_deadline),
     whitelistRoot: record.whitelist_root,
+  }
+}
+
+// Reads the member addresses registered for a whitelist root. Empty when the
+// root was never registered (the caller then uses the built-in demo whitelist).
+// A simple simulate, no Poseidon or prover, so it stays Vercel-safe.
+// sourceRef: contracts/whitelist-registry/src/lib.rs get_members.
+async function getRegistryMembers(root: bigint): Promise<string[]> {
+  const contract = new Contract(WHITELIST_REGISTRY_CONTRACT_ID)
+  const sourceAccount = new Account(SIMULATION_SOURCE_ACCOUNT, '0')
+  const transaction = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE_STROOPS,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call('get_members', nativeToScVal(root, { type: 'u256' })))
+    .setTimeout(30)
+    .build()
+  try {
+    const simulation = await rpcServer.simulateTransaction(transaction)
+    if (!rpc.Api.isSimulationSuccess(simulation) || !simulation.result) {
+      return []
+    }
+    const decoded = scValToNative(simulation.result.retval) as unknown
+    if (!Array.isArray(decoded)) {
+      return []
+    }
+    return decoded.filter((address): address is string => typeof address === 'string')
+  } catch {
+    return []
   }
 }
 
@@ -324,11 +360,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     })
   }
 
-  console.log(`[reveal] auction ${auctionId}: ${bids.length} bids decrypted`)
+  const registryMembers = await getRegistryMembers(auctionState.whitelistRoot)
+  const members = registryMembers.length > 0 ? registryMembers : [...DEMO_WHITELIST_MEMBERS]
+
+  console.log(`[reveal] auction ${auctionId}: ${bids.length} bids, ${members.length} whitelist members`)
   res.status(200).json({
     ok: true,
     auctionId,
     whitelistRoot: auctionState.whitelistRoot.toString(),
+    members,
     bids,
   })
 }

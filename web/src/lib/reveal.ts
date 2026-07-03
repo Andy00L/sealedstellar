@@ -18,7 +18,7 @@ export type RevealedBid = {
 }
 
 export type RevealResult =
-  | { kind: 'revealed'; bids: RevealedBid[]; whitelistRoot: string }
+  | { kind: 'revealed'; bids: RevealedBid[]; members: string[]; whitelistRoot: string }
   | { kind: 'already_settled' }
 
 const REVEAL_ENDPOINT = '/api/reveal'
@@ -27,6 +27,7 @@ type RevealResponseBody = {
   ok?: boolean
   alreadySettled?: boolean
   whitelistRoot?: unknown
+  members?: unknown
   bids?: unknown
   error?: { kind?: string; message?: string }
 }
@@ -61,6 +62,20 @@ function parseRevealedBids(rawBids: unknown): RevealedBid[] | null {
   return bids
 }
 
+function parseMembers(rawMembers: unknown): string[] | null {
+  if (!Array.isArray(rawMembers)) {
+    return null
+  }
+  const members: string[] = []
+  for (const member of rawMembers) {
+    if (typeof member !== 'string') {
+      return null
+    }
+    members.push(member)
+  }
+  return members
+}
+
 export async function requestReveal(auctionId: number): Promise<Result<RevealResult, string>> {
   let response: Response
   try {
@@ -86,10 +101,14 @@ export async function requestReveal(auctionId: number): Promise<Result<RevealRes
       return { ok: true, value: { kind: 'already_settled' } }
     }
     const bids = parseRevealedBids(payload.bids)
-    if (bids === null || typeof payload.whitelistRoot !== 'string') {
+    const members = parseMembers(payload.members)
+    if (bids === null || members === null || typeof payload.whitelistRoot !== 'string') {
       return { ok: false, error: 'reveal returned an unexpected shape' }
     }
-    return { ok: true, value: { kind: 'revealed', bids, whitelistRoot: payload.whitelistRoot } }
+    return {
+      ok: true,
+      value: { kind: 'revealed', bids, members, whitelistRoot: payload.whitelistRoot },
+    }
   }
 
   return { ok: false, error: payload.error?.message ?? `reveal failed (${response.status})` }

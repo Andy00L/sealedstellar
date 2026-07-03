@@ -23,6 +23,7 @@ import { useWallet } from '@/hooks/useWallet'
 import { walletKit } from '@/lib/wallet-kit'
 import {
   submitCreateAuction,
+  submitRegisterWhitelist,
   type CreateAuctionParams,
   type WalletSigner,
 } from '@/lib/transactions'
@@ -32,6 +33,9 @@ import {
   loadWalletAssets,
   type WalletAsset,
 } from '@/lib/wallet-assets'
+import { computeWhitelistRoot } from '@/lib/whitelist-tree'
+import { DEMO_WHITELIST_MEMBERS } from '@/lib/demo-whitelist'
+import { WhitelistEditorDialog } from '@/components/auction/WhitelistEditorDialog'
 import { truncateHex } from '@/lib/format'
 import {
   DEMO_OPERATOR_ENC_PUBKEY_HEX,
@@ -78,6 +82,15 @@ function hexToBytes32(hexText: string): Uint8Array {
   return bytes
 }
 
+// True when the chosen whitelist is exactly the demo whitelist (same members, in
+// order): then the auction uses the known demo root and skips registration.
+function sameMembers(first: readonly string[], second: readonly string[]): boolean {
+  if (first.length !== second.length) {
+    return false
+  }
+  return first.every((address, index) => address === second[index])
+}
+
 type ParsedBig = { ok: true; value: bigint } | { ok: false; message: string }
 
 function parsePositiveBig(amountText: string, label: string): ParsedBig {
@@ -119,7 +132,10 @@ export function CreateAuctionRoute() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<'lot' | 'payment'>('lot')
   const [pickerState, setPickerState] = useState<TokenPickerState>({ phase: 'loading' })
+  const [whitelistMembers, setWhitelistMembers] = useState<string[]>([...DEMO_WHITELIST_MEMBERS])
+  const [whitelistOpen, setWhitelistOpen] = useState(false)
 
+  const whitelistIsDemo = sameMembers(whitelistMembers, DEMO_WHITELIST_MEMBERS)
   const tokenOptions = buildTokenOptions(customTokens)
   const symbolOf = (contractId: string): string =>
     tokenOptions.find((option) => option.value === contractId)?.label ?? 'token'
@@ -191,19 +207,6 @@ export function CreateAuctionRoute() {
       return
     }
 
-    const nowSeconds = Math.floor(Date.now() / 1000)
-    const params: CreateAuctionParams = {
-      sellerAddress: wallet.address,
-      rwaToken: lotTokenId,
-      lotAmount: lotAmount.value,
-      paymentToken: paymentTokenId,
-      maxPrice: maxPrice.value,
-      commitDeadline: BigInt(nowSeconds + windowMinutes.value * SECONDS_PER_MINUTE),
-      gracePeriod: BigInt(graceHours.value * SECONDS_PER_HOUR),
-      whitelistRoot: BigInt(DEMO_WHITELIST_ROOT_DECIMAL),
-      operatorEncPubkey: hexToBytes32(DEMO_OPERATOR_ENC_PUBKEY_HEX),
-    }
-
     setCreateStage({ stage: 'submitting' })
     const signWithFreighter: WalletSigner = async (transactionXdr) => {
       try {
@@ -215,6 +218,45 @@ export function CreateAuctionRoute() {
       } catch {
         return { ok: false, error: 'declined' }
       }
+    }
+
+    // The demo whitelist uses its known root and needs no registration (the
+    // reveal has its members built in as a fallback). A custom whitelist is
+    // registered on chain first, one extra signature, so the reveal can read
+    // the members back and rebuild the winner's path.
+    let whitelistRoot: bigint
+    if (whitelistIsDemo) {
+      whitelistRoot = BigInt(DEMO_WHITELIST_ROOT_DECIMAL)
+    } else {
+      const rootResult = await computeWhitelistRoot(whitelistMembers)
+      if (!rootResult.ok) {
+        setCreateStage({ stage: 'form', validationMessage: rootResult.error })
+        return
+      }
+      whitelistRoot = rootResult.value
+      const registered = await submitRegisterWhitelist(
+        whitelistRoot,
+        whitelistMembers,
+        wallet.address,
+        signWithFreighter,
+      )
+      if (!registered.ok) {
+        setCreateStage({ stage: 'failed', failure: registered.error })
+        return
+      }
+    }
+
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    const params: CreateAuctionParams = {
+      sellerAddress: wallet.address,
+      rwaToken: lotTokenId,
+      lotAmount: lotAmount.value,
+      paymentToken: paymentTokenId,
+      maxPrice: maxPrice.value,
+      commitDeadline: BigInt(nowSeconds + windowMinutes.value * SECONDS_PER_MINUTE),
+      gracePeriod: BigInt(graceHours.value * SECONDS_PER_HOUR),
+      whitelistRoot,
+      operatorEncPubkey: hexToBytes32(DEMO_OPERATOR_ENC_PUBKEY_HEX),
     }
     const submitted = await submitCreateAuction(params, signWithFreighter)
     if (!submitted.ok) {
@@ -333,8 +375,27 @@ export function CreateAuctionRoute() {
               </FormField>
             </div>
 
+            <div className="grid gap-2">
+              <FormField label="Whitelist (who can win)">
+                <div className="flex items-center justify-between gap-3 rounded-[12px] border border-border bg-white/65 px-3.5 py-2.5">
+                  <span className="text-[12.5px] text-muted-foreground">
+                    {whitelistIsDemo
+                      ? `Demo whitelist · ${whitelistMembers.length} wallets`
+                      : `Custom · ${whitelistMembers.length} wallets (one extra signature)`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setWhitelistOpen(true)}
+                    className="text-[12px] font-medium text-primary transition hover:underline"
+                  >
+                    Edit whitelist
+                  </button>
+                </div>
+              </FormField>
+            </div>
+
             <span className="rounded-[13px] border border-border-soft bg-white/45 px-3.5 py-2.75 text-[12px] leading-[1.5] text-muted-foreground">
-              New auctions use the demo operator key and KYC whitelist. Only whitelisted accounts
+              New auctions use the demo operator key and the whitelist set above. Only whitelisted accounts
               can win: a non-whitelisted wallet may still bid, but if its bid is the top bid the
               auction cannot be settled and only refunds after the grace period. The max price is
               escrowed by each bidder as a uniform deposit.
@@ -369,6 +430,17 @@ export function CreateAuctionRoute() {
               onPick={addAndSelectToken}
               onClose={() => setPickerOpen(false)}
             />
+            {whitelistOpen && (
+              <WhitelistEditorDialog
+                open
+                initialMembers={whitelistMembers}
+                onConfirm={(members) => {
+                  setWhitelistMembers(members)
+                  setWhitelistOpen(false)
+                }}
+                onClose={() => setWhitelistOpen(false)}
+              />
+            )}
           </div>
         )}
       </div>

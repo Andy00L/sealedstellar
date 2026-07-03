@@ -12,7 +12,7 @@ import {
   xdr,
 } from '@stellar/stellar-sdk'
 
-import { AUCTION_CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../config'
+import { AUCTION_CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL, WHITELIST_REGISTRY_CONTRACT_ID } from '../config'
 import { rpcServer } from './rpc'
 import {
   classifyCreateAuctionContractError,
@@ -312,6 +312,34 @@ function mapInvocationToCreateFailure(failure: InvocationFailure): CreateAuction
     case 'submission_failed':
       return { kind: 'submission_failed', detail: failure.detail }
   }
+}
+
+// ---------------------------------------------------------------------------
+// register (whitelist registry): store a custom whitelist's members on chain so
+// the reveal can rebuild the winner's Merkle path. One extra signature before
+// create_auction, and only for a custom whitelist. Immutable per root, so this
+// is safe to re-send. sourceRef: contracts/whitelist-registry/src/lib.rs.
+// ---------------------------------------------------------------------------
+
+export async function submitRegisterWhitelist(
+  whitelistRoot: bigint,
+  members: readonly string[],
+  registrarAddress: string,
+  signWithWallet: WalletSigner,
+): Promise<Result<{ txHash: string }, CreateAuctionFailure>> {
+  const membersScVal = xdr.ScVal.scvVec(
+    members.map((member) => nativeToScVal(member, { type: 'address' })),
+  )
+  const operation = new Contract(WHITELIST_REGISTRY_CONTRACT_ID).call(
+    'register',
+    nativeToScVal(whitelistRoot, { type: 'u256' }),
+    membersScVal,
+  )
+  const outcome = await submitInvocation(registrarAddress, operation, signWithWallet)
+  if (outcome.ok) {
+    return { ok: true, value: { txHash: outcome.value.txHash } }
+  }
+  return { ok: false, error: mapInvocationToCreateFailure(outcome.error) }
 }
 
 // ---------------------------------------------------------------------------

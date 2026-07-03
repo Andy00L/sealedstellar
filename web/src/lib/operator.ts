@@ -18,6 +18,7 @@ import { StrKey } from '@stellar/stellar-sdk'
 import { groth16, type Groth16Proof } from 'snarkjs'
 
 import { getPoseidonHasher } from './crypto'
+import { PoseidonMerkleTree, computeAddressLeaf, MERKLE_DEPTH } from './whitelist-tree'
 import type { Result } from './errors'
 import type { RevealedBid } from './reveal'
 import type { SettleBundle } from './transactions'
@@ -27,10 +28,6 @@ import { MAX_BID_SLOTS } from '../config'
 // Served from web/public/circuit (copied from circuits/build at predev/prebuild).
 const CIRCUIT_WASM_URL = '/circuit/auction_winner.wasm'
 const CIRCUIT_ZKEY_URL = '/circuit/auction_winner.zkey'
-
-// Whitelist tree depth; must equal the circuit's merkleDepth.
-// sourceRef: circuits/auction_winner.circom, circuits/test/helpers.js.
-const MERKLE_DEPTH = 10
 
 export type OperatorPhase = 'fetching' | 'decrypting' | 'building' | 'proving' | 'done'
 
@@ -113,57 +110,6 @@ function selectVickreyOutcome(prices: bigint[]): {
     }
   })
   return { winnerIndex, winnerPrice, clearingPrice }
-}
-
-// leaf = Poseidon2(hi_128, lo_128) over the 32 raw key bytes, big-endian halves.
-function computeAddressLeaf(hash: (inputs: bigint[]) => bigint, keyBytes: Uint8Array): bigint {
-  let highHalf = 0n
-  let lowHalf = 0n
-  for (let byteIndex = 0; byteIndex < 16; byteIndex += 1) {
-    highHalf = (highHalf << 8n) | BigInt(keyBytes[byteIndex])
-    lowHalf = (lowHalf << 8n) | BigInt(keyBytes[byteIndex + 16])
-  }
-  return hash([highHalf, lowHalf])
-}
-
-class PoseidonMerkleTree {
-  private readonly levels: bigint[][] = []
-  private readonly depth: number
-
-  constructor(hash: (inputs: bigint[]) => bigint, depth: number, leaves: bigint[]) {
-    this.depth = depth
-    const capacity = 2 ** depth
-    const paddedLeaves = leaves.slice()
-    while (paddedLeaves.length < capacity) {
-      paddedLeaves.push(0n) // empty whitelist leaves are 0 (frozen)
-    }
-    this.levels.push(paddedLeaves)
-    for (let levelIndex = 0; levelIndex < depth; levelIndex += 1) {
-      const previousLevel = this.levels[levelIndex]
-      const nextLevel: bigint[] = []
-      for (let pairIndex = 0; pairIndex < previousLevel.length; pairIndex += 2) {
-        nextLevel.push(hash([previousLevel[pairIndex], previousLevel[pairIndex + 1]]))
-      }
-      this.levels.push(nextLevel)
-    }
-  }
-
-  get root(): bigint {
-    return this.levels[this.depth][0]
-  }
-
-  pathFor(leafIndex: number): { elements: bigint[]; indexBits: number[] } {
-    const elements: bigint[] = []
-    const indexBits: number[] = []
-    let runningIndex = leafIndex
-    for (let levelIndex = 0; levelIndex < this.depth; levelIndex += 1) {
-      const siblingIndex = runningIndex % 2 === 0 ? runningIndex + 1 : runningIndex - 1
-      elements.push(this.levels[levelIndex][siblingIndex])
-      indexBits.push(runningIndex % 2)
-      runningIndex = Math.floor(runningIndex / 2)
-    }
-    return { elements, indexBits }
-  }
 }
 
 // ---------------------------------------------------------------------------

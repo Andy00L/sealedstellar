@@ -13,7 +13,6 @@ import { Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useWallet } from '@/hooks/useWallet'
 import { walletKit } from '@/lib/wallet-kit'
-import { DEMO_WHITELIST_MEMBERS } from '@/lib/demo-whitelist'
 import { NETWORK_PASSPHRASE } from '@/config'
 import {
   parseSettleBundle,
@@ -101,7 +100,7 @@ export function OperatorStepper({ auction, filledSlots, onSettled }: OperatorSte
     const result = await proveSettleFromRevealedBids(
       auction,
       revealed.value.bids,
-      DEMO_WHITELIST_MEMBERS,
+      revealed.value.members,
       (phase) => {
         setProvePhase(phase)
         setProvePercent(PHASE_PERCENT[phase])

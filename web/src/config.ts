@@ -13,6 +13,11 @@ export const STELLAR_EXPERT_TX_BASE = 'https://stellar.expert/explorer/testnet/t
 // Standing Vickrey instances (docs/DECISIONS.md 2026-06-13).
 export const AUCTION_CONTRACT_ID = 'CB5MMHVHPKG65D2DYO7HVGBDCMQIDEYP2O7DK5EYPYJUDZQXHWAJJDJ4'
 export const VERIFIER_CONTRACT_ID = 'CD7PHFDZMHHCN25FKCERAFVXQC77CQOF55YP57VU3WEVPDY7RCNH6EGO'
+// Whitelist registry: maps a KYC whitelist root to its member addresses so a
+// per-auction custom whitelist can be rebuilt at settle. Additive, deployed
+// 2026-07-03. sourceRef: contracts/whitelist-registry/src/lib.rs.
+export const WHITELIST_REGISTRY_CONTRACT_ID =
+  'CCMBTTSEHZJ2VCREYTR36QZAAHR43D24IDEHPCMXR66B6HNFCAUXNNWA'
 
 // Off-chain indexer base URL (the indexer/ service). The list reads from it for
 // scalable filter / sort / pagination and falls back to direct RPC reads when it

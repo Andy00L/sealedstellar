@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["verifier", "auction"]
+members = ["verifier", "auction", "whitelist-registry"]
 
 [workspace.dependencies]
 # crypto::bn254 (CAP-0074, CAP-0080; live on testnet since Protocol 25/26) is
